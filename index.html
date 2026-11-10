@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JS在线运行工具</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/monokai.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/default.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/javascript-hint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/edit/closebrackets.js"></script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      height: 100vh;
+      background-color: #121212;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      overflow: hidden;
+      transition: background 0.3s, color 0.3s;
+    }
+    body.light-mode {
+      background-color: #ffffff;
+      color: #222;
+    }
+    .container {
+      width: 90%;
+      height: 100%;
+      margin: 0 auto;
+      padding: 18px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap:12px;
+    }
+    h2 {
+      font-weight: 500;
+      font-size: 22px;
+    }
+    .btn-group {
+      display: flex;
+      gap:8px;
+    }
+    button {
+      padding: 6px 12px;
+      font-size:14px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background:#333;
+      color:#ddd;
+    }
+    body.light-mode button {
+      background:#e5e5e5;
+      color:#222;
+    }
+    button:hover {
+      background:#444;
+    }
+    body.light-mode button:hover {
+      background:#d8d8d8;
+    }
+    #fileInput {
+      display: none;
+    }
+    #cm-editor {
+      flex: 1;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    body.light-mode #cm-editor {
+      border-color:#ccc;
+    }
+    .CodeMirror {
+      height: 100%;
+      font-size: 25px !important;
+      line-height: 1.45 !important;
+      font-family: Consolas, Monaco, "Courier New", monospace !important;
+    }
+    .CodeMirror-hint {
+      font-size:16px;
+    }
+    .console-wrap {
+      min-height: 200px;
+      display: flex;
+      flex-direction: column;
+    }
+    .console-title-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: #222;
+      border: 1px solid #333;
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+    }
+    body.light-mode .console-title-bar {
+      background:#eee;
+      border-color:#ccc;
+    }
+    .console-title {
+      color: #aaa;
+      font-size: 14px;
+    }
+    body.light-mode .console-title {
+      color:#555;
+    }
+    #clearBtn {
+      padding: 4px 10px;
+      font-size: 13px;
+    }
+    #console {
+      flex: 1;
+      min-height: 200px;
+      background: #111;
+      color: #4ade80;
+      border: 1px solid #333;
+      border-radius: 0 0 8px 8px;
+      padding: 10px 14px;
+      overflow-y: auto;
+      font-family: Consolas, monospace;
+      font-size: 14px;
+      white-space: pre-wrap;
+    }
+    body.light-mode #console {
+      background:#f8f8f8;
+      color:#208838;
+      border-color:#ccc;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <h2>JS 在线运行工具</h2>
+      <div class="btn-group">
+        <button id="importJs">导入JS</button>
+        <button id="formatCode">格式化</button>
+        <button id="clearEditor">清空编辑器</button>
+        <button id="saveJs">保存JS</button>
+        <button id="toggleTheme">切换浅色/暗黑</button>
+        <input type="file" id="fileInput" accept=".js">
+      </div>
+    </div>
+    <div id="cm-editor"></div>
+    <div class="console-wrap">
+      <div class="console-title-bar">
+        <span class="console-title">控制台输出</span>
+        <button id="clearBtn">清空控制台</button>
+      </div>
+      <div id="console"></div>
+    </div>
+  </div>
+
+<script type="module">
+  import * as prettier from "https://unpkg.com/prettier@3.3.2/standalone.mjs";
+  import * as prettierPluginBabel from "https://unpkg.com/prettier@3.3.2/plugins/babel.mjs";
+  import * as prettierPluginEstree from "https://unpkg.com/prettier@3.3.2/plugins/estree.mjs";
+
+  const STORAGE_KEY = "js_runner_code";
+  const THEME_KEY = "js_runner_theme";
+  const defaultCode = `console.log("hello js");
+console.log("实时运行，修改代码自动执行");
+let a = 100;
+console.log(a * 2);`;
+
+  const savedCode = localStorage.getItem(STORAGE_KEY);
+  const savedTheme = localStorage.getItem(THEME_KEY);
+
+  const editor = CodeMirror(document.getElementById('cm-editor'), {
+    value: savedCode ?? defaultCode,
+    mode: "javascript",
+    theme: savedTheme ?? "monokai",
+    lineWrapping: true,
+    lineNumbers: true,
+    tabSize: 2,
+    indentWithTabs: false,
+    autoCloseBrackets: true,
+    hintOptions: {
+      completeSingle: false
+    },
+    extraKeys: {
+      "Ctrl-Space": "autocomplete",
+      "Tab": function(cm) {
+        if (cm.somethingSelected()) {
+          cm.indentSelection("add");
+        } else {
+          cm.replaceSelection("  ", "end");
+        }
+      },
+      "Shift-Tab": function(cm) {
+        cm.indentSelection("subtract");
+      }
+    }
+  });
+
+  let isDark = !(savedTheme === "default");
+  if (!isDark) {
+    document.body.classList.add("light-mode");
+  }
+
+  editor.on('inputRead', function(cm) {
+    if (!cm.state.completeActive) {
+      cm.showHint();
+    }
+  });
+
+  const consoleBox = document.getElementById("console");
+  const clearBtn = document.getElementById("clearBtn");
+  const clearEditorBtn = document.getElementById("clearEditor");
+  const saveJsBtn = document.getElementById("saveJs");
+  const toggleThemeBtn = document.getElementById("toggleTheme");
+  const importJsBtn = document.getElementById("importJs");
+  const fileInput = document.getElementById("fileInput");
+  const formatCodeBtn = document.getElementById("formatCode");
+
+  let runTimer = null;
+  let iframe = null;
+
+  function appendLog(text) {
+    consoleBox.textContent += text + '\n';
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+  }
+  function clearConsole() {
+    consoleBox.textContent = '';
+  }
+  clearBtn.onclick = clearConsole;
+
+  editor.on('change', () => {
+    localStorage.setItem(STORAGE_KEY, editor.getValue());
+    clearTimeout(runTimer);
+    runTimer = setTimeout(runCode, 350);
+  })
+
+  importJsBtn.onclick = () => {
+    fileInput.click();
+  }
+  fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      editor.setValue(evt.target.result);
+      fileInput.value = '';
+    }
+    reader.readAsText(file);
+  }
+
+  // 修复：async + 正确传入插件
+  formatCodeBtn.onclick = async () => {
+    try {
+      const raw = editor.getValue();
+      const formatted = await prettier.format(raw, {
+        parser: "babel",
+        plugins: [prettierPluginBabel, prettierPluginEstree],
+        tabWidth: 2,
+        semi: true,
+        singleQuote: false
+      });
+      editor.setValue(formatted);
+    } catch (err) {
+      appendLog('[格式化失败] 语法错误：' + err.message);
+    }
+  }
+
+  clearEditorBtn.onclick = () => {
+    editor.setValue("");
+    clearConsole();
+  }
+
+  saveJsBtn.onclick = () => {
+    const code = editor.getValue();
+    const blob = new Blob([code], {type: "text/plain"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "test.js";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  toggleThemeBtn.onclick = () => {
+    isDark = !isDark;
+    if(isDark){
+      editor.setOption("theme", "monokai");
+      document.body.classList.remove("light-mode");
+      localStorage.setItem(THEME_KEY, "monokai");
+    }else{
+      editor.setOption("theme", "default");
+      document.body.classList.add("light-mode");
+      localStorage.setItem(THEME_KEY, "default");
+    }
+  }
+
+  function runCode() {
+    if (iframe) iframe.remove();
+    iframe = document.createElement('iframe');
+    iframe.sandbox = "allow-scripts";
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+
+    const code = editor.getValue();
+    const html = `
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+const oldLog = console.log;
+console.log = function(...args) {
+  window.parent.postMessage({type:'log', data:args.join(' ')}, '*');
+  oldLog.apply(console, args);
+};
+window.onerror = function(msg,url,line,col,err){
+  window.parent.postMessage({type:'error', data:msg + ' 行号:'+line}, '*');
+}
+${code}
+<\/script>
+</body>
+</html>
+    `
+    iframe.srcdoc = html;
+  }
+
+  window.addEventListener('message', (e) => {
+    if(e.data.type === 'log'){
+      appendLog('[log] ' + e.data.data);
+    }else if(e.data.type === 'error'){
+      appendLog('[error] ' + e.data.data);
+    }
+  })
+
+  runCode();
+</script>
+</body>
+</html>
