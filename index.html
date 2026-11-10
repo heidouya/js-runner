@@ -615,10 +615,15 @@
     if (!autoRun) clearTimeout(runTimer);
   };
 
-  editor.on('inputRead', function(cm) {
-    if (!cm.state.completeActive) {
-      cm.showHint();
-    }
+  // 只在输入标识符字符（字母、数字、下划线、$、汉字）时弹出补全，
+  // 输入分号、冒号、句号、括号、空白等标点时不触发
+  const HINT_TRIGGER = /^[A-Za-z0-9_$\u4e00-\u9fff]$/;
+
+  editor.on('inputRead', function(cm, change) {
+    if (cm.state.completeActive) return;
+    const typed = change.text.join("");
+    if (!HINT_TRIGGER.test(typed)) return;
+    cm.showHint();
   });
 
   const consoleBox = document.getElementById("console");
