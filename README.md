@@ -25,6 +25,10 @@
 
 <img src="./imgs/2.png" alt="设置页面" style="width:100%"/>
 
+清空弹窗展示：
+
+<img src="./imgs/3.png" alt="清空确定" style="width:100%"/>
+
 ## 📦 技术栈
 
 - CodeMirror 5：代码编辑器
