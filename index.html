@@ -424,7 +424,7 @@
         <div class="setting-row">
           <div class="setting-label">
             代码文件
-            <span class="setting-desc">导入本地 .js 文件，或把当前代码保存为 test.js</span>
+            <span class="setting-desc">导入本地 .js 文件，或把当前代码按当前时间命名保存</span>
           </div>
           <div class="setting-actions">
             <button id="importJs">导入JS</button>
@@ -729,10 +729,19 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "test.js";
+    a.download = buildFileName();
     a.click();
     URL.revokeObjectURL(url);
     closeSettings();
+  }
+
+  // 保存文件名：年-月-日-时-分-秒.js，例如 2026-11-11-00-15-30.js
+  function buildFileName() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const date = [d.getFullYear(), pad(d.getMonth() + 1), pad(d.getDate())].join("-");
+    const time = [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join("-");
+    return `${date}-${time}.js`;
   }
 
   toggleThemeBtn.onclick = () => {
