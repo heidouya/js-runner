@@ -15,7 +15,7 @@
 - ✅ 控制台输出日志、捕获运行错误
 - ✅ Tab / Shift+Tab 缩进控制
 
-<image src="./imgs/1.png" style="width:80%"/>
+<img src="./imgs/1.png" alt="演示效果" style="width:100%"/>
 
 ## 📦 技术栈
 
