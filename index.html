@@ -230,6 +230,39 @@
       outline: 2px solid #4ade80;
       outline-offset: 2px;
     }
+    /* 清空确认弹窗 */
+    .confirm-modal {
+      width: 380px;
+    }
+    .confirm-body {
+      padding: 18px 16px;
+      font-size: 14px;
+      line-height: 1.65;
+      color: #ccc;
+    }
+    body.light-mode .confirm-body {
+      color: #444;
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 0 16px 16px;
+    }
+    .danger-btn {
+      background: #b91c1c;
+      color: #fff;
+    }
+    .danger-btn:hover {
+      background: #dc2626;
+    }
+    body.light-mode button.danger-btn {
+      background: #dc2626;
+      color: #fff;
+    }
+    body.light-mode button.danger-btn:hover {
+      background: #b91c1c;
+    }
     .stepper {
       display: flex;
       align-items: center;
@@ -322,8 +355,8 @@
       <h2>JS 在线运行工具</h2>
       <div class="btn-group">
         <button id="runBtn">运行</button>
-        <button id="formatCode">格式化</button>
         <button id="clearEditor">清空</button>
+        <button id="formatCode">格式化</button>
         <button id="settingsBtn">设置</button>
       </div>
     </div>
@@ -399,6 +432,23 @@
             <input type="file" id="fileInput" accept=".js">
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 清空确认弹窗 -->
+  <div class="modal-mask" id="confirmMask">
+    <div class="settings-modal confirm-modal">
+      <div class="settings-header">
+        <span>确认清空</span>
+        <button id="closeConfirm" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="confirm-body">
+        当前代码和控制台输出都会被清空，且无法恢复，确定要清空吗？
+      </div>
+      <div class="modal-footer">
+        <button id="confirmCancel">取消</button>
+        <button id="confirmClear" class="danger-btn">确定清空</button>
       </div>
     </div>
   </div>
@@ -633,8 +683,39 @@
   }
 
   clearEditorBtn.onclick = () => {
+    openConfirm();
+  }
+
+  const confirmMask = document.getElementById("confirmMask");
+  const closeConfirmBtn = document.getElementById("closeConfirm");
+  const confirmCancelBtn = document.getElementById("confirmCancel");
+  const confirmClearBtn = document.getElementById("confirmClear");
+
+  function openConfirm() {
+    confirmMask.classList.add("show");
+    // 默认聚焦「取消」，避免误按回车直接清空
+    confirmCancelBtn.focus();
+  }
+  function closeConfirm() {
+    confirmMask.classList.remove("show");
+    clearEditorBtn.focus();
+  }
+
+  closeConfirmBtn.onclick = closeConfirm;
+  confirmCancelBtn.onclick = closeConfirm;
+  confirmMask.onclick = (e) => {
+    if (e.target === confirmMask) closeConfirm();
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && confirmMask.classList.contains("show")) {
+      closeConfirm();
+    }
+  });
+
+  confirmClearBtn.onclick = () => {
     editor.setValue("");
     clearConsole();
+    closeConfirm();
   }
 
   runBtn.onclick = () => {
