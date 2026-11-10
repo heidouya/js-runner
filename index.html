@@ -16,6 +16,10 @@
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/edit/closebrackets.js"></script>
 
   <style>
+    :root {
+      --editor-font-size: 25px;
+      --console-font-size: 14px;
+    }
     * {
       margin: 0;
       padding: 0;
@@ -173,6 +177,25 @@
       gap: 8px;
       flex-shrink: 0;
     }
+    .stepper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .step-btn {
+      width: 32px;
+      padding: 4px 0;
+      font-size: 15px;
+      line-height: 1;
+      text-align: center;
+    }
+    .step-value {
+      min-width: 52px;
+      text-align: center;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
     #cm-editor {
       flex: 1;
       border: 1px solid #333;
@@ -184,7 +207,7 @@
     }
     .CodeMirror {
       height: 100%;
-      font-size: 25px !important;
+      font-size: var(--editor-font-size) !important;
       line-height: 1.45 !important;
       font-family: Consolas, Monaco, "Courier New", monospace !important;
     }
@@ -230,8 +253,8 @@
       padding: 10px 14px;
       overflow-y: auto;
       font-family: Consolas, monospace;
-      font-size: 14px;
       white-space: pre-wrap;
+      font-size: var(--console-font-size);
     }
     body.light-mode #console {
       background:#f8f8f8;
@@ -270,13 +293,24 @@
       <div class="settings-body">
         <div class="setting-row">
           <div class="setting-label">
-            代码文件
-            <span class="setting-desc">导入本地 .js 文件，或把当前代码保存为 test.js</span>
+            编辑器字体大小
+            <span class="setting-desc">代码区字号，12–48 px</span>
           </div>
-          <div class="setting-actions">
-            <button id="importJs">导入JS</button>
-            <button id="saveJs">保存JS</button>
-            <input type="file" id="fileInput" accept=".js">
+          <div class="stepper">
+            <button class="step-btn" id="editorFontMinus" title="减小字号">−</button>
+            <span class="step-value" id="editorFontValue">25px</span>
+            <button class="step-btn" id="editorFontPlus" title="增大字号">+</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            控制台字体大小
+            <span class="setting-desc">输出区字号，10–28 px</span>
+          </div>
+          <div class="stepper">
+            <button class="step-btn" id="consoleFontMinus" title="减小字号">−</button>
+            <span class="step-value" id="consoleFontValue">14px</span>
+            <button class="step-btn" id="consoleFontPlus" title="增大字号">+</button>
           </div>
         </div>
         <div class="setting-row">
@@ -286,6 +320,17 @@
           </div>
           <div class="setting-actions">
             <button id="toggleTheme">切换浅色/暗黑</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            代码文件
+            <span class="setting-desc">导入本地 .js 文件，或把当前代码保存为 test.js</span>
+          </div>
+          <div class="setting-actions">
+            <button id="importJs">导入JS</button>
+            <button id="saveJs">保存JS</button>
+            <input type="file" id="fileInput" accept=".js">
           </div>
         </div>
       </div>
@@ -366,6 +411,61 @@ console.log(a * 2);`;
     }
   });
   updateThemeDesc();
+
+  // ===== 字体大小设置 =====
+  const EDITOR_FONT_KEY = "js_runner_editor_font";
+  const CONSOLE_FONT_KEY = "js_runner_console_font";
+  const FONT_RANGE = {
+    editor: { min: 12, max: 48, def: 25 },
+    console: { min: 10, max: 28, def: 14 }
+  };
+
+  const editorFontValueEl = document.getElementById("editorFontValue");
+  const consoleFontValueEl = document.getElementById("consoleFontValue");
+  const editorFontMinusBtn = document.getElementById("editorFontMinus");
+  const editorFontPlusBtn = document.getElementById("editorFontPlus");
+  const consoleFontMinusBtn = document.getElementById("consoleFontMinus");
+  const consoleFontPlusBtn = document.getElementById("consoleFontPlus");
+
+  function readFont(key, conf) {
+    const raw = parseInt(localStorage.getItem(key), 10);
+    if (Number.isNaN(raw)) return conf.def;
+    return Math.min(conf.max, Math.max(conf.min, raw));
+  }
+
+  let editorFontSize = readFont(EDITOR_FONT_KEY, FONT_RANGE.editor);
+  let consoleFontSize = readFont(CONSOLE_FONT_KEY, FONT_RANGE.console);
+
+  function applyFontSizes() {
+    document.documentElement.style.setProperty("--editor-font-size", editorFontSize + "px");
+    document.documentElement.style.setProperty("--console-font-size", consoleFontSize + "px");
+    editorFontValueEl.textContent = editorFontSize + "px";
+    consoleFontValueEl.textContent = consoleFontSize + "px";
+    // 字号变化后重算 CodeMirror 的行高与渲染尺寸
+    editor.refresh();
+  }
+
+  function stepFont(target, delta) {
+    const conf = FONT_RANGE[target];
+    const current = target === "editor" ? editorFontSize : consoleFontSize;
+    const next = Math.min(conf.max, Math.max(conf.min, current + delta));
+    if (next === current) return;
+    if (target === "editor") {
+      editorFontSize = next;
+      localStorage.setItem(EDITOR_FONT_KEY, String(next));
+    } else {
+      consoleFontSize = next;
+      localStorage.setItem(CONSOLE_FONT_KEY, String(next));
+    }
+    applyFontSizes();
+  }
+
+  editorFontMinusBtn.onclick = () => stepFont("editor", -1);
+  editorFontPlusBtn.onclick = () => stepFont("editor", 1);
+  consoleFontMinusBtn.onclick = () => stepFont("console", -1);
+  consoleFontPlusBtn.onclick = () => stepFont("console", 1);
+
+  applyFontSizes();
 
   editor.on('inputRead', function(cm) {
     if (!cm.state.completeActive) {
