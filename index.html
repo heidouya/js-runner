@@ -629,6 +629,93 @@
     cm.showHint();
   });
 
+  // ===== 补全候选里加入当前文档自己声明的变量 / 函数 =====
+  // CodeMirror 自带的 JS 提示只覆盖全局对象、关键字和少量局部作用域，
+  // 这里扫描全文的 const/let/var、function/class 名与参数，合并进候选列表
+  const baseJsHint = CodeMirror.hint.javascript;
+
+  function collectUserNames(code) {
+    const names = new Set();
+    const takeDeclarators = (raw) => {
+      String(raw).split(",").forEach((piece) => {
+        const left = piece.split("=")[0];
+        const ids = left.match(/[A-Za-z_$][\w$]*/g) || [];
+        ids.forEach((id) => names.add(id));
+      });
+    };
+
+    let m;
+    // const / let / var（含逗号连声明、解构）
+    const declRe = /\b(?:const|let|var)\s+([^;\n]+)/g;
+    while ((m = declRe.exec(code))) takeDeclarators(m[1]);
+
+    // function / class 名字
+    const fnRe = /\b(?:function|class)\s+([A-Za-z_$][\w$]*)/g;
+    while ((m = fnRe.exec(code))) names.add(m[1]);
+
+    // 函数参数
+    const paramRe = /\bfunction\s*[A-Za-z_$]*\s*\(([^)]*)\)/g;
+    while ((m = paramRe.exec(code))) takeDeclarators(m[1]);
+
+    // 箭头函数参数
+    const arrowRe = /(?:\(([^()]*)\)|[A-Za-z_$][\w$]*)\s*=>/g;
+    while ((m = arrowRe.exec(code))) {
+      if (m[1]) {
+        takeDeclarators(m[1]);
+      } else {
+        const id = m[0].match(/[A-Za-z_$][\w$]*/);
+        if (id) names.add(id[0]);
+      }
+    }
+
+    return names;
+  }
+
+  const userNameCache = { gen: -1, names: null };
+  function getUserNames(cm) {
+    const gen = cm.changeGeneration();
+    if (userNameCache.gen !== gen) {
+      userNameCache.gen = gen;
+      userNameCache.names = collectUserNames(cm.getValue());
+    }
+    return userNameCache.names;
+  }
+
+  CodeMirror.registerHelper("hint", "javascript", function(cm, options) {
+    const base = (baseJsHint && baseJsHint(cm, options)) || { list: [], from: cm.getCursor() };
+    const cur = cm.getCursor();
+    const before = cm.getLine(cur.line).slice(0, cur.ch);
+    const prefixMatch = /[A-Za-z_$][\w$]*$/.exec(before);
+    const prefix = prefixMatch ? prefixMatch[0] : "";
+    const head = before.slice(0, before.length - prefix.length);
+
+    // 注释、字符串里不补全自定义名字
+    const tokenType = cm.getTokenAt(cur).type || "";
+    if (/comment|string/.test(tokenType)) return base;
+
+    // 对象成员访问（foo.bar）不补充文档内的局部名字
+    if (head.endsWith(".")) return base;
+
+    const baseList = base.list || [];
+    const existing = new Set(baseList.map((it) => (typeof it === "string" ? it : it.text)));
+    const list = baseList.slice();
+
+    getUserNames(cm).forEach((name) => {
+      if (name === prefix || existing.has(name)) return;
+      if (prefix && !name.startsWith(prefix)) return;
+      existing.add(name);
+      list.push(name);
+    });
+
+    if (list.length === baseList.length) return base;
+
+    return {
+      list,
+      from: base.from || CodeMirror.Pos(cur.line, cur.ch - prefix.length),
+      to: base.to || cur
+    };
+  });
+
   const consoleBox = document.getElementById("console");
   const clearBtn = document.getElementById("clearBtn");
   const runBtn = document.getElementById("runBtn");
