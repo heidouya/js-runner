@@ -622,12 +622,20 @@
   };
 
   // 只在输入标识符字符（字母、数字、下划线、$、汉字）时弹出补全，
-  // 输入分号、冒号、句号、括号、空白等标点时不触发
+  // 输入分号、冒号、句号、括号、空白等标点时不触发；
+  // 例外：标识符后输入 "."（成员访问）时要弹出成员提示
   const HINT_TRIGGER = /^[A-Za-z0-9_$\u4e00-\u9fff]$/;
+  const MEMBER_DOT = /[A-Za-z_$][\w$]*\.$/;
 
   editor.on('inputRead', function(cm, change) {
     if (cm.state.completeActive) return;
     const typed = change.text.join("");
+    if (typed === ".") {
+      const cur = cm.getCursor();
+      const before = cm.getLine(cur.line).slice(0, cur.ch);
+      if (MEMBER_DOT.test(before)) cm.showHint();
+      return;
+    }
     if (!HINT_TRIGGER.test(typed)) return;
     cm.showHint();
   });
