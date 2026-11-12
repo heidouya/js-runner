@@ -788,6 +788,21 @@
           if (node.id) names.add(node.id.name);
           addClassMembers(node, null, classMembers, members);
           break;
+        case "AssignmentExpression":
+          // cfg.newProp = 1 这类后补属性也收进成员表
+          if (
+            node.left &&
+            node.left.type === "MemberExpression" &&
+            !node.left.computed &&
+            node.left.object &&
+            node.left.object.type === "Identifier" &&
+            node.left.property
+          ) {
+            const prop = keyName(node.left.property);
+            const objName = node.left.object.name;
+            if (prop && objName) ensureSet(members, objName).add(prop);
+          }
+          break;
         case "CatchClause":
           addPatternIds(node.param, names);
           break;
