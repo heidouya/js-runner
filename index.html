@@ -909,7 +909,8 @@
     }
 
     data.names.forEach((name) => {
-      if (existing.has(name)) return;
+      // 名字已经完整敲出来（与当前前缀完全一致）就不再作为候选
+      if (name === prefix || existing.has(name)) return;
       if (prefix && !name.startsWith(prefix)) return;
       existing.add(name);
       list.push(name);
