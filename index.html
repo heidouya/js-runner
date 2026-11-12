@@ -15,6 +15,9 @@
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/javascript-hint.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/edit/closebrackets.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/comment/comment.js"></script>
+  <!-- 容错 JS 解析器：用真实语法树收集声明名，加载失败时自动退回正则方案 -->
+  <script defer src="https://cdn.jsdelivr.net/npm/acorn@8.14.0/dist/acorn.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/acorn-loose@8.4.0/dist/acorn-loose.js"></script>
 
   <style>
     :root {
@@ -631,10 +634,11 @@
 
   // ===== 补全候选里加入当前文档自己声明的变量 / 函数 =====
   // CodeMirror 自带的 JS 提示只覆盖全局对象、关键字和少量局部作用域，
-  // 这里扫描全文的 const/let/var、function/class 名与参数，合并进候选列表
+  // 这里收集全文的 const/let/var、function/class 名、参数、catch 参数等，合并进候选列表。
+  // acorn-loose 可用时走真实语法树（更准），加载失败则退回正则扫描。
   const baseJsHint = CodeMirror.hint.javascript;
 
-  function collectUserNames(code) {
+  function collectNamesWithRegex(code) {
     const names = new Set();
     const takeDeclarators = (raw) => {
       String(raw).split(",").forEach((piece) => {
@@ -671,11 +675,98 @@
     return names;
   }
 
-  const userNameCache = { gen: -1, names: null };
+  // 从绑定模式（Identifier / 解构 / 默认值 / rest）里取出所有被声明的名字
+  function addPatternIds(pattern, out) {
+    if (!pattern || typeof pattern.type !== "string") return;
+    switch (pattern.type) {
+      case "Identifier":
+        out.add(pattern.name);
+        break;
+      case "ObjectPattern":
+        pattern.properties.forEach((p) => {
+          addPatternIds(p.type === "RestElement" ? p.argument : p.value, out);
+        });
+        break;
+      case "ArrayPattern":
+        pattern.elements.forEach((el) => addPatternIds(el, out));
+        break;
+      case "AssignmentPattern":
+        addPatternIds(pattern.left, out);
+        break;
+      case "RestElement":
+        addPatternIds(pattern.argument, out);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function collectNamesWithAst(code) {
+    const names = new Set();
+    const ast = window.acorn.loose.parse(code, { ecmaVersion: "latest" });
+    const stack = [ast];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || typeof node.type !== "string") continue;
+      switch (node.type) {
+        case "VariableDeclarator":
+          addPatternIds(node.id, names);
+          break;
+        case "FunctionDeclaration":
+        case "FunctionExpression":
+        case "ArrowFunctionExpression":
+          if (node.id) names.add(node.id.name);
+          (node.params || []).forEach((p) => addPatternIds(p, names));
+          break;
+        case "ClassDeclaration":
+        case "ClassExpression":
+          if (node.id) names.add(node.id.name);
+          break;
+        case "CatchClause":
+          addPatternIds(node.param, names);
+          break;
+        case "ImportDeclaration":
+          (node.specifiers || []).forEach((s) => {
+            if (s.local) names.add(s.local.name);
+          });
+          break;
+        default:
+          break;
+      }
+      for (const key in node) {
+        if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "range") continue;
+        const val = node[key];
+        if (Array.isArray(val)) {
+          for (let i = 0; i < val.length; i++) {
+            const child = val[i];
+            if (child && typeof child.type === "string") stack.push(child);
+          }
+        } else if (val && typeof val === "object" && typeof val.type === "string") {
+          stack.push(val);
+        }
+      }
+    }
+    return names;
+  }
+
+  function collectUserNames(code) {
+    if (window.acorn && window.acorn.loose) {
+      try {
+        return collectNamesWithAst(code);
+      } catch (e) {
+        // 解析器异常时退回正则，不影响补全可用性
+      }
+    }
+    return collectNamesWithRegex(code);
+  }
+
+  const userNameCache = { gen: -1, astReady: false, names: null };
   function getUserNames(cm) {
     const gen = cm.changeGeneration();
-    if (userNameCache.gen !== gen) {
+    const astReady = !!(window.acorn && window.acorn.loose);
+    if (userNameCache.gen !== gen || userNameCache.astReady !== astReady) {
       userNameCache.gen = gen;
+      userNameCache.astReady = astReady;
       userNameCache.names = collectUserNames(cm.getValue());
     }
     return userNameCache.names;
