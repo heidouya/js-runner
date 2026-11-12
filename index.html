@@ -701,8 +701,64 @@
     }
   }
 
-  function collectNamesWithAst(code) {
+  function ensureSet(map, key) {
+    let set = map.get(key);
+    if (!set) {
+      set = new Set();
+      map.set(key, set);
+    }
+    return set;
+  }
+
+  // 对象键 / 类成员的显示名
+  function keyName(node) {
+    if (!node) return null;
+    if (node.type === "Identifier") return node.name;
+    if (node.type === "Literal") {
+      if (typeof node.value === "string" || typeof node.value === "number") return String(node.value);
+    }
+    return null;
+  }
+
+  // 对象字面量的键名 -> 变量名
+  function addObjectKeys(objNode, varName, members) {
+    const set = ensureSet(members, varName);
+    (objNode.properties || []).forEach((p) => {
+      if (p && p.type === "Property" && !p.computed) {
+        const k = keyName(p.key);
+        if (k) set.add(k);
+      }
+    });
+  }
+
+  // 类的方法 / 字段名 -> 类名，以及赋值给变量的匿名类
+  function addClassMembers(classNode, varName, classMembers, members) {
+    const set = new Set();
+    const body = (classNode.body && classNode.body.body) || [];
+    body.forEach((m) => {
+      if (!m) return;
+      if (m.type !== "MethodDefinition" && m.type !== "PropertyDefinition") return;
+      if (m.type === "MethodDefinition" && m.kind === "constructor") return;
+      if (m.key && m.key.type === "PrivateIdentifier") return;
+      const k = keyName(m.key);
+      if (k) set.add(k);
+    });
+    if (classNode.id && classNode.id.name) {
+      classMembers.set(classNode.id.name, set);
+      const target = ensureSet(members, classNode.id.name);
+      set.forEach((k) => target.add(k));
+    }
+    if (varName) {
+      const target = ensureSet(members, varName);
+      set.forEach((k) => target.add(k));
+    }
+  }
+
+  function collectWithAst(code) {
     const names = new Set();
+    const members = new Map();       // 变量名 -> 可用成员名
+    const classMembers = new Map();  // 类名 -> 成员名
+    const instances = [];            // [变量名, 类名]
     const ast = window.acorn.loose.parse(code, { ecmaVersion: "latest" });
     const stack = [ast];
     while (stack.length) {
@@ -711,6 +767,15 @@
       switch (node.type) {
         case "VariableDeclarator":
           addPatternIds(node.id, names);
+          if (node.id.type === "Identifier" && node.init) {
+            if (node.init.type === "ObjectExpression") {
+              addObjectKeys(node.init, node.id.name, members);
+            } else if (node.init.type === "NewExpression" && node.init.callee && node.init.callee.type === "Identifier") {
+              instances.push([node.id.name, node.init.callee.name]);
+            } else if (node.init.type === "ClassExpression") {
+              addClassMembers(node.init, node.id.name, classMembers, members);
+            }
+          }
           break;
         case "FunctionDeclaration":
         case "FunctionExpression":
@@ -721,6 +786,7 @@
         case "ClassDeclaration":
         case "ClassExpression":
           if (node.id) names.add(node.id.name);
+          addClassMembers(node, null, classMembers, members);
           break;
         case "CatchClause":
           addPatternIds(node.param, names);
@@ -746,30 +812,39 @@
         }
       }
     }
-    return names;
-  }
 
-  function collectUserNames(code) {
-    if (window.acorn && window.acorn.loose) {
-      try {
-        return collectNamesWithAst(code);
-      } catch (e) {
-        // 解析器异常时退回正则，不影响补全可用性
+    instances.forEach((pair) => {
+      const set = classMembers.get(pair[1]);
+      if (set) {
+        const target = ensureSet(members, pair[0]);
+        set.forEach((k) => target.add(k));
       }
-    }
-    return collectNamesWithRegex(code);
+    });
+
+    return { names, members };
   }
 
-  const userNameCache = { gen: -1, astReady: false, names: null };
-  function getUserNames(cm) {
+  const userDataCache = { gen: -1, astReady: false, names: new Set(), members: null };
+  function getUserData(cm) {
     const gen = cm.changeGeneration();
     const astReady = !!(window.acorn && window.acorn.loose);
-    if (userNameCache.gen !== gen || userNameCache.astReady !== astReady) {
-      userNameCache.gen = gen;
-      userNameCache.astReady = astReady;
-      userNameCache.names = collectUserNames(cm.getValue());
+    if (userDataCache.gen === gen && userDataCache.astReady === astReady) {
+      return userDataCache;
     }
-    return userNameCache.names;
+    userDataCache.gen = gen;
+    userDataCache.astReady = astReady;
+    userDataCache.members = null;
+    userDataCache.names = collectNamesWithRegex(cm.getValue());
+    if (astReady) {
+      try {
+        const data = collectWithAst(cm.getValue());
+        userDataCache.names = data.names;
+        userDataCache.members = data.members;
+      } catch (e) {
+        // 解析器异常时退回正则结果，不影响补全可用性
+      }
+    }
+    return userDataCache;
   }
 
   CodeMirror.registerHelper("hint", "javascript", function(cm, options) {
@@ -784,15 +859,33 @@
     const tokenType = cm.getTokenAt(cur).type || "";
     if (/comment|string/.test(tokenType)) return base;
 
-    // 对象成员访问（foo.bar）不补充文档内的局部名字
-    if (head.endsWith(".")) return base;
-
     const baseList = base.list || [];
     const existing = new Set(baseList.map((it) => (typeof it === "string" ? it : it.text)));
     const list = baseList.slice();
+    const data = getUserData(cm);
 
-    getUserNames(cm).forEach((name) => {
-      if (name === prefix || existing.has(name)) return;
+    // 对象成员访问（foo.bar）：用语法树反查 foo 声明的对象键 / 类成员
+    if (head.endsWith(".")) {
+      const ownerMatch = /([A-Za-z_$][\w$]*)$/.exec(head.slice(0, -1));
+      if (!ownerMatch || !data.members) return base;
+      const set = data.members.get(ownerMatch[1]);
+      if (!set) return base;
+      set.forEach((name) => {
+        if (existing.has(name)) return;
+        if (prefix && !name.startsWith(prefix)) return;
+        existing.add(name);
+        list.push(name);
+      });
+      if (list.length === baseList.length) return base;
+      return {
+        list,
+        from: CodeMirror.Pos(cur.line, cur.ch - prefix.length),
+        to: cur
+      };
+    }
+
+    data.names.forEach((name) => {
+      if (existing.has(name)) return;
       if (prefix && !name.startsWith(prefix)) return;
       existing.add(name);
       list.push(name);
