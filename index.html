@@ -544,9 +544,35 @@
   </div>
 
 <script type="module">
-  import * as prettier from "https://unpkg.com/prettier@3.3.2/standalone.mjs";
-  import * as prettierPluginBabel from "https://unpkg.com/prettier@3.3.2/plugins/babel.mjs";
-  import * as prettierPluginEstree from "https://unpkg.com/prettier@3.3.2/plugins/estree.mjs";
+  // Prettier 三个模块约 1.5MB，不放在静态 import 里：静态 import 一旦加载失败，
+  // 整个模块脚本都不会执行，编辑器也就起不来（断网时实测如此）。
+  // 改成后台空闲时预加载，失败只影响「格式化」这一个功能。
+  let prettierBundle = null;
+  let prettierLoading = null;
+  function loadPrettier() {
+    if (prettierBundle) return Promise.resolve(prettierBundle);
+    if (!prettierLoading) {
+      prettierLoading = Promise.all([
+        import("https://unpkg.com/prettier@3.3.2/standalone.mjs"),
+        import("https://unpkg.com/prettier@3.3.2/plugins/babel.mjs"),
+        import("https://unpkg.com/prettier@3.3.2/plugins/estree.mjs")
+      ]).then(([prettier, babel, estree]) => {
+        prettierBundle = { prettier, babel, estree };
+        return prettierBundle;
+      });
+    }
+    return prettierLoading;
+  }
+  function preloadPrettier() {
+    loadPrettier().catch(() => {
+      prettierLoading = null; // 失败后清空，点「格式化」时再试一次
+    });
+  }
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(preloadPrettier, { timeout: 3000 });
+  } else {
+    setTimeout(preloadPrettier, 800);
+  }
 
   const STORAGE_KEY = "js_runner_code";
   const THEME_KEY = "js_runner_theme";
@@ -1086,20 +1112,31 @@
     reader.readAsText(file);
   }
 
-  // 修复：async + 正确传入插件
   formatCodeBtn.onclick = async () => {
+    const btnText = formatCodeBtn.textContent;
+    formatCodeBtn.disabled = true;
+    formatCodeBtn.textContent = "格式化中…";
     try {
       const raw = editor.getValue();
+      const { prettier, babel, estree } = await loadPrettier();
       const formatted = await prettier.format(raw, {
         parser: "babel",
-        plugins: [prettierPluginBabel, prettierPluginEstree],
+        plugins: [babel, estree],
         tabWidth: 2,
         semi: true,
         singleQuote: false
       });
       editor.setValue(formatted);
     } catch (err) {
-      appendLog('[格式化失败] 语法错误：' + err.message);
+      if (prettierBundle) {
+        appendLog('[格式化失败] 语法错误：' + err.message);
+      } else {
+        appendLog('[格式化失败] 需要联网加载 Prettier，当前加载失败：' + err.message);
+        prettierLoading = null; // 下次点击重新尝试
+      }
+    } finally {
+      formatCodeBtn.disabled = false;
+      formatCodeBtn.textContent = btnText;
     }
   }
 

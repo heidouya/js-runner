@@ -89,7 +89,7 @@ lib/acorn/
   acorn-loose.js          容错版，残码也能解析
 ```
 
-只有 Prettier 还走 CDN（模块顶部静态 `import`，三个 `.mjs`，约 1.5MB）。这么做的原因见第 12 章。
+只有 Prettier 还走 CDN（三个 `.mjs`，约 1.5MB）。它没有写在静态 `import` 里，而是页面空闲时在后台加载——这样断网或 CDN 挂掉时，丢的只是「格式化」，编辑器和运行照常可用。原因见第 12 章。
 
 ### 怎么读这份教程
 
@@ -1612,14 +1612,50 @@ formatCodeBtn.onclick = async () => {
 
 `finally` 里恢复按钮状态是关键：加载失败、格式化抛错时按钮不能一直卡在「格式化中…」禁用着。
 
-实测这一改：干净刷新时外部请求从 3 个降到 0 个（本地请求数不变，仍是 12 个），首屏唯一的网络下载就是那 3 个 prettier 模块（约 1.5MB）；首次点格式化时它们才出现，格式化结果正确。
+**本项目最终采用的方案：加载时机再往前挪一点。**
 
-**取舍**：这一步本项目最终没有保留，仍是顶部静态 `import`。原因是首次点「格式化」时要等 1.5MB 下载，按钮会停顿一两秒——对「我刚写完想看看整齐的样子」这种即时反馈，比打开页面时多等一下更难受。两个方案都成立，取决于你更在意打开还是更在意点击。
+上面这版是「点击时才加载」，代价是第一次点格式化要等 1.5MB。改成「页面空闲时在后台预加载」，就不必在点击时干等：
 
-> **可以直接对照的示例**：`examples/lazy-load/index.html` 就是按本章改造后的完整版本（acorn 延后加载 + Prettier 按需加载），功能和根目录版本一致。用同一个本地服务打开两个 URL，分别刷新一次数请求数，差别一眼可见：
+```js
+function preloadPrettier() {
+  loadPrettier().catch(() => {
+    prettierLoading = null;   // 失败后清空，点「格式化」时再试一次
+  });
+}
+if (window.requestIdleCallback) {
+  window.requestIdleCallback(preloadPrettier, { timeout: 3000 });
+} else {
+  setTimeout(preloadPrettier, 800);
+}
+```
+
+`requestIdleCallback` 在浏览器空闲时才执行，不会和首屏渲染抢时间；`timeout: 3000` 是兜底——如果页面一直不空闲，3 秒后也会启动加载。通常你在写第一行代码的时候，它已经在后台拉完了。
+
+**为什么不用静态 `import`（哪怕是改成本地文件也不行）：**
+
+静态 `import` 一旦有一个模块加载失败，整张模块图就加载失败，内联的 `<script type="module">` 一行都不会执行。实测把 Prettier 的地址换成一个解析不了的域名来模拟断网，结果不是「格式化用不了」，而是**编辑器根本不出现**：
+
+```
+readyState = complete
+.CodeMirror = false        ← 编辑器没初始化
+控制台错误 = ERR_NAME_NOT_RESOLVED ×3
+```
+
+改成动态 `import()` 之后，同样的模拟环境下：
+
+```
+.CodeMirror = true
+点「运行」→ 控制台输出 2
+点「格式化」→ [格式化失败] 需要联网加载 Prettier，当前加载失败：...
+按钮恢复为「格式化」，编辑器内容不变
+```
+
+也就是说，断网时丢掉的只有一个旁路功能，写作和运行不受影响。这个差别比「省不省请求」更要紧。
+
+> **可以直接对照的示例**：`examples/lazy-load/index.html` 是「点击时才加载」的版本（acorn 也延后加载），根目录版本是「后台预加载」。用同一个本地服务打开两个 URL，分别刷新一次数请求数，差别一眼可见：
 >
 > ```
-> /index.html                       首屏 12 个本地请求 + 3 个外部请求（prettier，约 1.5MB）
+> /index.html                       首屏 12 个本地请求 + 3 个外部请求（很快出现，后台预加载）
 > /examples/lazy-load/index.html    首屏 12 个本地请求 + 0 个外部请求
 > ```
 
@@ -1666,10 +1702,13 @@ prettier:   public, max-age=31536000
 Prettier 为什么不一起搬？三个原因：
 
 1. 体积：`standalone.mjs` 加上 babel 插件约 1.5MB，是 CodeMirror 全部文件的三倍多
-2. `file://` 限制：三个模块是 `.mjs`（ESM），改成本地相对路径后，双击打开时会被 CORS 拒绝，整个 `<script type="module">` 会连带失效，页面直接崩
+2. `file://` 限制：三个模块是 `.mjs`（ESM），改成本地相对路径后，双击打开时会被 CORS 拒绝。即使用动态 `import()` 失败可控，也多了一层「双击场景下格式化永远不可用」的缺陷
 3. 影响面：它只在点「格式化」时才用到，本地化的收益远小于前 12 个文件
 
-如果确实想让格式化也能离线，需要改用 Prettier 的 UMD 版本（`standalone.js` + `plugins/babel.js` + `plugins/estree.js`），用普通 `<script>` 标签加载，通过 `window.prettier` / `window.prettierPlugins` 调用。这条路径本项目没有实施。
+如果确实想让格式化也能离线，有两类路径：
+
+- **改用 UMD 版本**（`standalone.js` + `plugins/babel.js` + `plugins/estree.js`），用普通 `<script>` 标签加载，通过 `window.prettier` / `window.prettierPlugins` 调用。普通脚本不受 CORS 限制，双击场景也能用；代价是 1.5MB 进仓库、升级要手动替换三个文件、调用方式也要跟着改。本项目评估后放弃了这条路线——收益只是「断网也能格式化」，代价却是仓库翻三倍。
+- **维持现状 + 保证优雅降级**（本项目采用的）：Prettier 留在 CDN、用动态 `import()` 加载。断网时只有格式化不可用，编辑器、补全、运行完全正常。README 里也把这一点写明，避免用户以为整个工具都要联网。
 
 ### 验证
 
