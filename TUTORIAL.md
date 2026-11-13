@@ -54,7 +54,18 @@ iframe 内部（隔离的执行环境）
 
 ```
 js-runner/
-├── index.html            ← 全部逻辑都在这里（CSS + HTML + 一个 <script type="module">）
+├── index.html            ← 页面骨架：HTML 结构 + 脚本引用（138 行）
+├── css/
+│   └── style.css         ← 全部样式：暗色/亮色主题、弹窗、移动端 @media、滚动条
+├── js/                   ← 按功能拆分的 8 个脚本，普通 <script defer> 按顺序加载
+│   ├── core.js           ← 常量、JR.state、文件名工具
+│   ├── console.js        ← 控制台输出区
+│   ├── runner.js         ← iframe 沙箱运行、自动运行防抖
+│   ├── editor.js         ← CodeMirror 初始化、内容持久化
+│   ├── hint.js           ← 补全触发、声明名收集、成员提示
+│   ├── settings.js       ← 设置弹窗、主题、字号、导入导出、清空确认
+│   ├── format.js         ← Prettier 加载与格式化
+│   └── main.js           ← 初始化编排
 ├── lib/                  ← 本地化的第三方依赖
 │   ├── codemirror/       ← CodeMirror 5 核心、模式、插件、主题（10 个文件）
 │   └── acorn/            ← 标准版与容错版解析器（2 个文件）
@@ -65,11 +76,13 @@ js-runner/
 └── imgs/                 ← 截图
 ```
 
-`index.html` 内部大致分三段：
+拆分前 `index.html` 是 1305 行（内联 `<style>` 420 行 + 一个 `<script type="module">` 758 行）。拆完后：
 
-1. `<style>`：暗色主题、亮色主题（`body.light-mode`）、弹窗、移动端 `@media`、滚动条
-2. `<body>`：工具栏、编辑器容器、控制台、两个弹窗（设置 / 清空确认）
-3. `<script type="module">`：编辑器初始化、设置、补全、运行、格式化、导入导出
+1. `index.html` 只剩 HTML 结构和引用：`<link href="css/style.css">` + 8 个 `<script defer src="js/…">`
+2. 样式全在 `css/style.css`，业务逻辑按功能分到 `js/` 下 8 个文件
+3. 每个 JS 文件都是一个 IIFE，只往 `window.JR` 上挂东西，互相之间靠这个命名空间通信，加载顺序 core → console → runner → editor → hint → settings → format → main
+
+为什么用普通 `<script defer>` 而不是继续用 `<script type="module">`：`file://` 双击打开时 module 脚本会因为 origin 为 `null` 被 CORS 拦掉，整页脚本都不执行；普通脚本没有这个限制，实测双击场景下编辑器、补全、格式化全部正常。
 
 ### 外部依赖
 
@@ -320,7 +333,7 @@ function runCode() {
 
 `textarea` 的问题不在「不能输入」，而在所有编辑体验都要自己写：行号、语法高亮、自动补括号、Tab 缩进、光标定位……每一项都是独立工程。这类需求有成熟的库，选一个接进去就行。
 
-本项目用 **CodeMirror 5**（不是 6）：它是「引入几个文件、`CodeMirror(容器, 配置)` 一下就能用」的形态，不需要构建工具，最适合单文件项目。
+本项目用 **CodeMirror 5**（不是 6）：它是「引入几个文件、`CodeMirror(容器, 配置)` 一下就能用」的形态，不需要构建工具，不需要打包，直接开浏览器就能跑。
 
 ### 3.2 四个必装文件
 

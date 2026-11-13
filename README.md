@@ -43,6 +43,31 @@
 
 - iframe 隔离执行代码
 
+## 🗂 项目结构
+
+```
+js-runner/
+├─ index.html           # 页面骨架：只有 HTML 结构和脚本引用
+├─ css/
+│  └─ style.css         # 全部样式（含移动端断点）
+├─ js/                  # 按功能拆分的脚本，普通脚本按顺序加载
+│  ├─ core.js           # 常量、全局状态 JR.state、文件名工具
+│  ├─ console.js        # 控制台输出区
+│  ├─ runner.js         # iframe 沙箱运行、自动运行防抖
+│  ├─ editor.js         # CodeMirror 初始化、内容持久化
+│  ├─ hint.js           # 补全：触发时机、声明名收集、成员提示
+│  ├─ settings.js       # 设置弹窗、主题、字号、导入导出、清空确认
+│  ├─ format.js         # Prettier 加载与格式化
+│  └─ main.js           # 初始化编排
+├─ lib/                 # 已本地化的第三方库（CodeMirror 5、acorn）
+├─ examples/lazy-load/  # 按需加载对照示例
+└─ imgs/                # 截图
+```
+
+脚本之间用 `window.JR` 一个命名空间通信，加载顺序是 core → console → runner → editor → hint → settings → format → main，每个模块只暴露 `JR.initXxx()` 和必要的 `JR.xxx()`。
+
+> 为什么是普通 `<script defer>` 而不是 `<script type="module">`：`file://` 双击打开时，浏览器按 CORS 策略拦截 module 脚本（origin 为 `null`），页面脚本会完全不执行；普通脚本没有这个限制。
+
 ## 🚀 快速使用
 
 1. 克隆仓库
