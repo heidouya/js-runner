@@ -850,11 +850,28 @@
     }
   }
 
+  // 内建构造函数的实例（new Date() / new Map() 等），成员名从原型上现取
+  const BUILTIN_CTORS = new Set(["Date", "Array", "Map", "Set", "WeakMap", "WeakSet", "RegExp", "Promise", "Error", "TypeError", "RangeError"]);
+  const builtinMemberCache = new Map();
+  function getBuiltinMembers(ctorName) {
+    if (builtinMemberCache.has(ctorName)) return builtinMemberCache.get(ctorName);
+    const set = new Set();
+    const ctor = window[ctorName];
+    if (ctor && ctor.prototype) {
+      Object.getOwnPropertyNames(ctor.prototype).forEach((n) => {
+        if (n !== "constructor") set.add(n);
+      });
+    }
+    builtinMemberCache.set(ctorName, set);
+    return set;
+  }
+
   function collectWithAst(code) {
     const names = new Set();
     const members = new Map();       // 变量名 -> 可用成员名
     const classMembers = new Map();  // 类名 -> 成员名
     const instances = [];            // [变量名, 类名]
+    const builtins = new Map();      // 变量名 -> 内建类型名
     const ast = window.acorn.loose.parse(code, { ecmaVersion: "latest" });
     const stack = [ast];
     while (stack.length) {
@@ -867,7 +884,15 @@
             if (node.init.type === "ObjectExpression") {
               addObjectKeys(node.init, node.id.name, members);
             } else if (node.init.type === "NewExpression" && node.init.callee && node.init.callee.type === "Identifier") {
-              instances.push([node.id.name, node.init.callee.name]);
+              const ctorName = node.init.callee.name;
+              // Date / Map 这类内建构造出来的实例，成员直接从运行时原型取
+              if (BUILTIN_CTORS.has(ctorName)) {
+                builtins.set(node.id.name, ctorName);
+              } else {
+                instances.push([node.id.name, ctorName]);
+              }
+            } else if (node.init.type === "ArrayExpression" || node.init.type === "ArrayPattern") {
+              builtins.set(node.id.name, "Array");
             } else if (node.init.type === "ClassExpression") {
               addClassMembers(node.init, node.id.name, classMembers, members);
             }
@@ -932,10 +957,10 @@
       }
     });
 
-    return { names, members };
+    return { names, members, builtins };
   }
 
-  const userDataCache = { gen: -1, astReady: false, names: new Set(), members: null };
+  const userDataCache = { gen: -1, astReady: false, names: new Set(), members: null, builtins: null };
   function getUserData(cm) {
     const gen = cm.changeGeneration();
     const astReady = !!(window.acorn && window.acorn.loose);
@@ -945,12 +970,14 @@
     userDataCache.gen = gen;
     userDataCache.astReady = astReady;
     userDataCache.members = null;
+    userDataCache.builtins = null;
     userDataCache.names = collectNamesWithRegex(cm.getValue());
     if (astReady) {
       try {
         const data = collectWithAst(cm.getValue());
         userDataCache.names = data.names;
         userDataCache.members = data.members;
+        userDataCache.builtins = data.builtins;
       } catch (e) {
         // 解析器异常时退回正则结果，不影响补全可用性
       }
@@ -975,11 +1002,15 @@
     const list = baseList.slice();
     const data = getUserData(cm);
 
-    // 对象成员访问（foo.bar）：用语法树反查 foo 声明的对象键 / 类成员
+    // 对象成员访问（foo.bar）：用语法树反查 foo 声明的对象键 / 类成员 / 内建实例原型
     if (head.endsWith(".")) {
       const ownerMatch = /([A-Za-z_$][\w$]*)$/.exec(head.slice(0, -1));
-      if (!ownerMatch || !data.members) return base;
-      const set = data.members.get(ownerMatch[1]);
+      if (!ownerMatch) return base;
+      let set = data.members ? data.members.get(ownerMatch[1]) : null;
+      if (!set && data.builtins) {
+        const ctor = data.builtins.get(ownerMatch[1]);
+        if (ctor) set = getBuiltinMembers(ctor);
+      }
       if (!set) return base;
       set.forEach((name) => {
         if (existing.has(name)) return;
