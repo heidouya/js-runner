@@ -31,11 +31,11 @@
 
 ## 📦 技术栈
 
-- CodeMirror 5：代码编辑器
+- CodeMirror 5：代码编辑器（文件已放在 `lib/codemirror/`，无需 CDN）
 
-- Prettier 3：代码格式化
+- Prettier 3：代码格式化（通过 CDN 加载，见注意事项）
 
-- acorn-loose 8：容错 JS 解析，用于收集当前文件内声明的变量 / 函数名并参与自动补全（加载失败时自动退回正则扫描）
+- acorn / acorn-loose 8：容错 JS 解析，用于收集当前文件内声明的变量 / 函数名并参与自动补全（加载失败时自动退回正则扫描；文件已放在 `lib/acorn/`）
 
 - 原生 HTML / JavaScript，无打包、无依赖安装
 
@@ -57,7 +57,7 @@ cd js-runner
 
 2. 直接打开 `index.html` 即可使用
 
-> 不需要 npm、不需要启动服务，本地双击打开就能跑（CodeMirror、Prettier 走 CDN，首次打开需要联网）。
+> 不需要 npm、不需要启动服务，本地双击打开就能跑。CodeMirror 与 acorn 已放在 `lib/` 目录，不联网也能编辑、运行、补全；只有「格式化」依赖 CDN 上的 Prettier，需要联网。
 
 ## 📖 使用说明
 
@@ -93,7 +93,7 @@ cd js-runner
 
 - 本工具**纯前端**，所有代码只保存在你自己浏览器，不会上传到任何服务器
 
-- 代码编辑器与格式化能力通过 CDN 加载（jsDelivr / unpkg），离线状态下页面无法正常使用
+- 编辑器相关依赖（CodeMirror、acorn）已随项目打包在 `lib/`，断网也能正常使用编辑、运行、补全；只有「格式化」需要联网下载 CDN 上的 Prettier，断网时点格式化会提示加载失败
 
 - 语法错误会直接在控制台打印报错信息，方便定位问题
 

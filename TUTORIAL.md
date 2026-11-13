@@ -54,9 +54,15 @@ iframe 内部（隔离的执行环境）
 
 ```
 js-runner/
-├── index.html    ← 全部代码都在这里（CSS + HTML + 一个 <script type="module">）
-├── README.md     ← 功能与使用说明
-└── imgs/         ← 截图
+├── index.html            ← 全部逻辑都在这里（CSS + HTML + 一个 <script type="module">）
+├── lib/                  ← 本地化的第三方依赖
+│   ├── codemirror/       ← CodeMirror 5 核心、模式、插件、主题（10 个文件）
+│   └── acorn/            ← 标准版与容错版解析器（2 个文件）
+├── examples/
+│   └── lazy-load/        ← 第 12 章的按需加载对照版本
+├── TUTORIAL.md           ← 本文档
+├── README.md             ← 功能与使用说明
+└── imgs/                 ← 截图
 ```
 
 `index.html` 内部大致分三段：
@@ -67,20 +73,23 @@ js-runner/
 
 ### 外部依赖
 
-全部走 CDN，`<head>` 里同步加载：
+编辑器相关的依赖已经下载到项目的 `lib/` 目录，`index.html` 用相对路径引用，不联网也能打开：
 
 ```
-CodeMirror 5.65.16
-  lib/codemirror.js, lib/codemirror.css
-  mode/javascript/javascript.js
-  theme/monokai.css, theme/default.css
-  addon/hint/show-hint.js, addon/hint/show-hint.css, addon/hint/javascript-hint.js
-  addon/edit/closebrackets.js
-  addon/comment/comment.js
+lib/codemirror/           CodeMirror 5.65.16
+  codemirror.js, codemirror.css
+  javascript.js           语法高亮与 JS 模式
+  monokai.css             深色主题
+  show-hint.js, show-hint.css, javascript-hint.js
+  closebrackets.js        自动补括号
+  comment.js              Ctrl-/ 注释
 
-acorn 8.14 + acorn-loose 8.4     （head 里 defer）
-Prettier 3.3.2                    （模块顶部静态 import，三个 .mjs）
+lib/acorn/
+  acorn.js                标准 JS 解析器
+  acorn-loose.js          容错版，残码也能解析
 ```
+
+只有 Prettier 还走 CDN（模块顶部静态 `import`，三个 `.mjs`，约 1.5MB）。这么做的原因见第 12 章。
 
 ### 怎么读这份教程
 
@@ -330,6 +339,8 @@ function runCode() {
 - `theme/*.css`：主题是纯 CSS，不加载就只是一个没颜色的框
 - `mode/javascript/javascript.js`：语法高亮的规则表，不加载则整段代码同色
 - `lib/codemirror.js`：本体
+
+> 上面写的是 CDN 地址，因为你还是要先跑起来才谈得上优化。当前版本这些文件已经下载到 `lib/codemirror/` 并改成相对路径，原因和第 12 章的本地化一节讲的一致。`theme/default.css` 那一行在本地化时被删掉了——它在 CDN 上返回 404，默认主题的样式其实内联在 `codemirror.css` 里。
 
 插件的加载方式一样，用到哪个加哪个：
 
@@ -1509,15 +1520,15 @@ import * as prettierPluginEstree from "https://unpkg.com/prettier@3.3.2/plugins/
 2. 传输字节总量（右下角）
 3. 从请求到页面可交互的时间
 
-本项目当前的一次干净刷新（未命中缓存）：**15 个外部请求**，加上本地 `index.html` 一共 16 条。分布是：
+本项目当前的一次干净刷新（未命中缓存）：**12 个本地请求 + 3 个外部请求**。分布是：
 
-| 类别 | 数量 | 具体文件 |
+| 类别 | 数量 | 来源 |
 | --- | --- | --- |
-| CodeMirror 核心 + 模式 | 2 | `lib/codemirror.js`、`mode/javascript/javascript.js` |
-| CodeMirror 插件 | 5 | show-hint.js、show-hint.css、javascript-hint.js、closebrackets.js、comment.js |
-| CodeMirror 样式 | 3 | `lib/codemirror.css`、`theme/monokai.css`、`theme/default.css` |
-| acorn | 2 | `acorn.js`、`acorn-loose.js` |
-| Prettier | 3 | `standalone.mjs`、`plugins/babel.mjs`、`plugins/estree.mjs` |
+| CodeMirror 核心 + 模式 | 2 | 本地 `lib/codemirror/` |
+| CodeMirror 插件 | 5 | 本地 `lib/codemirror/` |
+| CodeMirror 样式 | 2 | 本地 `lib/codemirror/`（`codemirror.css`、`monokai.css`） |
+| acorn | 2 | 本地 `lib/acorn/` |
+| Prettier | 3 | CDN（unpkg，约 1.5MB） |
 
 体积上的账：CodeMirror 全家桶 0.4MB 左右，acorn 0.3MB 左右，Prettier 1.5MB 左右。**Prettier 一家占了三分之二还多，而它只服务于一个按钮。**
 
@@ -1549,8 +1560,8 @@ function loadScript(src) {
 }
 
 window.addEventListener("load", () => {
-  loadScript("https://cdn.jsdelivr.net/npm/acorn@8.14.0/dist/acorn.js")
-    .then(() => loadScript("https://cdn.jsdelivr.net/npm/acorn-loose@8.4.0/dist/acorn-loose.js"))
+  loadScript("lib/acorn/acorn.js")
+    .then(() => loadScript("lib/acorn/acorn-loose.js"))
     .catch(() => { /* 加载失败就继续用正则兜底 */ });
 }, { once: true });
 ```
@@ -1601,15 +1612,15 @@ formatCodeBtn.onclick = async () => {
 
 `finally` 里恢复按钮状态是关键：加载失败、格式化抛错时按钮不能一直卡在「格式化中…」禁用着。
 
-实测这一改：干净刷新时外部请求数从 15 降到 12，请求列表里不再出现 prettier，首屏下载量从约 2MB 降到约 0.6MB；首次点格式化时那 3 个请求才出现，格式化结果正确。
+实测这一改：干净刷新时外部请求从 3 个降到 0 个（本地请求数不变，仍是 12 个），首屏唯一的网络下载就是那 3 个 prettier 模块（约 1.5MB）；首次点格式化时它们才出现，格式化结果正确。
 
 **取舍**：这一步本项目最终没有保留，仍是顶部静态 `import`。原因是首次点「格式化」时要等 1.5MB 下载，按钮会停顿一两秒——对「我刚写完想看看整齐的样子」这种即时反馈，比打开页面时多等一下更难受。两个方案都成立，取决于你更在意打开还是更在意点击。
 
 > **可以直接对照的示例**：`examples/lazy-load/index.html` 就是按本章改造后的完整版本（acorn 延后加载 + Prettier 按需加载），功能和根目录版本一致。用同一个本地服务打开两个 URL，分别刷新一次数请求数，差别一眼可见：
 >
 > ```
-> /index.html                       首屏 15 个外部请求（含 prettier 3 个，约 1.5MB）
-> /examples/lazy-load/index.html    首屏 12 个外部请求（无 prettier）
+> /index.html                       首屏 12 个本地请求 + 3 个外部请求（prettier，约 1.5MB）
+> /examples/lazy-load/index.html    首屏 12 个本地请求 + 0 个外部请求
 > ```
 
 ### 12.4 缓存：第二次刷新为什么快
@@ -1629,19 +1640,36 @@ prettier:   public, max-age=31536000
 
 注意 `?v=N` 只影响 `index.html` 本身，CDN 的路径没变，缓存照常命中。
 
-### 12.5 更彻底的一条路：本地化
+### 12.5 本地化：把 CodeMirror 搬到项目里
 
-把 CodeMirror 那 10 个文件下载到项目目录（比如 `lib/`），`index.html` 改相对路径引用：
+更进一步的做法是把 CodeMirror 的 10 个文件和 acorn 的 2 个文件下载到项目目录，`index.html` 改用相对路径：
 
 ```html
-<link rel="stylesheet" href="lib/codemirror.css">
-<script src="lib/codemirror.js"></script>
+<link rel="stylesheet" href="lib/codemirror/codemirror.css">
+<script src="lib/codemirror/codemirror.js"></script>
 ```
 
-- 收益：首屏**零网络请求**，读本地文件；断网可用；不受 CDN 抖动影响（本次开发期间就遇到过 jsdelivr 偶发卡住导致页面停在 loading）
-- 代价：项目从「单文件」变成「文件 + 目录」；升级版本要手动替换这 10 个文件
+本项目已经这么做了，目录结构见开篇的「外部依赖」一节。实测结果：
 
-Prettier 那三个 `.mjs` 也可以在本地放，但 `file://` 协议下 ESM 的跨源规则更严格，双击打开的场景可能会报错，需要实测。
+- 首屏 12 个请求全部命中本地文件（`127.0.0.1` 或磁盘），一个网络请求都没有；只有 Prettier 那 3 个还走 CDN
+- 断网状态下编辑、运行、补全都正常，只有点「格式化」会失败
+- `file://` 双击打开的场景同样正常，因为普通 `<script>` 和 `<link>` 不受 CORS 限制
+
+代价也真实存在：
+
+- 项目从「单文件」变成「文件 + 目录」，`.gitignore` 之后要考虑这些文件要不要进版本库（本项目选择进）
+- 升级 CodeMirror 版本要手动替换这 12 个文件，没法靠改一个版本号解决
+- 仓库体积增加约 770KB
+
+历史备注：`<head>` 里原本还有一行 `theme/default.css`，本地化时才发现这个文件在 CDN 上根本不存在（返回 404），默认主题的样式其实内联在 `codemirror.css` 里，那一行一直是个无效请求，顺手删掉了。
+
+Prettier 为什么不一起搬？三个原因：
+
+1. 体积：`standalone.mjs` 加上 babel 插件约 1.5MB，是 CodeMirror 全部文件的三倍多
+2. `file://` 限制：三个模块是 `.mjs`（ESM），改成本地相对路径后，双击打开时会被 CORS 拒绝，整个 `<script type="module">` 会连带失效，页面直接崩
+3. 影响面：它只在点「格式化」时才用到，本地化的收益远小于前 12 个文件
+
+如果确实想让格式化也能离线，需要改用 Prettier 的 UMD 版本（`standalone.js` + `plugins/babel.js` + `plugins/estree.js`），用普通 `<script>` 标签加载，通过 `window.prettier` / `window.prettierPlugins` 调用。这条路径本项目没有实施。
 
 ### 验证
 
