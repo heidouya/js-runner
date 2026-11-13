@@ -1126,7 +1126,15 @@
         semi: true,
         singleQuote: false
       });
+      // setValue 会把滚动位置和光标重置到开头，先记下来再还原
+      const scrollInfo = editor.getScrollInfo();
+      const cursorPos = editor.getCursor();
       editor.setValue(formatted);
+      editor.setCursor({
+        line: Math.min(cursorPos.line, editor.lastLine()),
+        ch: cursorPos.ch
+      });
+      editor.scrollTo(scrollInfo.left, scrollInfo.top);
     } catch (err) {
       if (prettierBundle) {
         appendLog('[格式化失败] 语法错误：' + err.message);

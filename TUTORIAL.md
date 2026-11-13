@@ -48,7 +48,7 @@ iframe 内部（隔离的执行环境）
 补全和格式化走的是另外两条独立链路：
 
 - **补全**：`inputRead` 事件 → 判断触发字符 → `cm.showHint()` → 我们注册的 hint 函数合并「默认候选 + 自己收集的名字 + 成员表」
-- **格式化**：点「格式化」→ `prettier.format(代码, {parser:'babel', plugins:[...]})` → `editor.setValue(结果)`
+- **格式化**：点「格式化」→ `prettier.format(代码, {parser:'babel', plugins:[...]})` → `editor.setValue(结果)` → 还原滚动位置与光标（见 11.5）
 
 ### 文件结构
 
@@ -1479,17 +1479,43 @@ Prettier 3 把插件拆了出去，核心包不再自带语法解析能力：
 
 ### 11.4 代价：加载体积
 
-三个模块加起来 1.5MB 往上，其中 `babel.mjs` 一个就过 MB。它们是在模块顶部静态 `import` 的：
+三个模块加起来 1.5MB 往上，其中 `babel.mjs` 一个就过 MB。
+
+如果把它们写在模块顶部的静态 `import` 里，意味着：**打开页面就要下载并解析这 1.5MB，哪怕用户一次都不点格式化**。实测首次打开时，这三个文件占了首屏下载量的大头，直接拖慢「打开就能用」的体验。
+
+所以本项目改成了按需动态 `import()`，具体做法和取舍放在第 12 章讲。
+
+### 11.5 一个容易忽略的副作用：setValue 会重置视图
+
+第一版就是这么写的：
 
 ```js
-import * as prettier from "https://unpkg.com/prettier@3.3.2/standalone.mjs";
-import * as prettierPluginBabel from "https://unpkg.com/prettier@3.3.2/plugins/babel.mjs";
-import * as prettierPluginEstree from "https://unpkg.com/prettier@3.3.2/plugins/estree.mjs";
+editor.setValue(formatted);
 ```
 
-静态 `import` 意味着：**打开页面就要下载并解析这 1.5MB，哪怕用户一次都不点格式化**。
+代码短的时候看不出问题。一旦文件有几十行、用户滚到中间点「格式化」，视图会直接跳回第一行——用户失去了刚才看的位置，也不确定格式化到底动了哪里。实测：滚动到 `scrollTop = 1400` 的位置点格式化，返回后变成 `0`。
 
-这不是理论问题。实测首次打开时，这三个文件占了首屏下载量的大头，直接拖慢「打开就能用」的体验。第 12 章会讲怎么测量和怎么改，以及为什么本项目最终还是保留了这种写法。
+修法是把视图状态记下来再还原：
+
+```js
+const scrollInfo = editor.getScrollInfo();   // 水平 + 垂直滚动位置
+const cursorPos  = editor.getCursor();       // 当前光标
+
+editor.setValue(formatted);
+
+editor.setCursor({
+  line: Math.min(cursorPos.line, editor.lastLine()),
+  ch: cursorPos.ch
+});
+editor.scrollTo(scrollInfo.left, scrollInfo.top);
+```
+
+两个细节值得说：
+
+- **顺序不能反**。`setCursor` 自身会把视图滚到光标处，所以必须先 `setCursor`、后 `scrollTo`，让像素位置最后覆盖。
+- **`Math.min` 不能省**。格式化会改变行数，原来的行号可能超出新文档范围，`setCursor` 会报越界或落到末尾。
+
+局限也要说清：格式化会重排缩进和换行，行号只能近似映射，光标落在「同一行的相近位置」，不会精确到字符。要做到精确映射得对前后文本做 diff，代价远大于收益，这个项目没做。
 
 ### 验证
 
@@ -1946,6 +1972,7 @@ URL.revokeObjectURL(url);      // 用完释放，否则这块内存挂到页面�
 | `date.` 没有候选 | 只收集了源码里的类 | 10 |
 | `obj.` 冒出一堆 `toString` | 查成员时先查了原型 | 10 |
 | 点格式化按钮卡在「格式化中…」 | `finally` 里没恢复状态 | 12 |
+| 格式化后视图跳回第一行 | `setValue` 重置滚动与光标 | 11 |
 | 滚动条怎么改都没反应 | 选择器写在了 `.CodeMirror-scroll` | 13 |
 | 导出的 `.js` 双击被拦 | 文件带 `Zone.Identifier` + `.js` 关联 WSH | 13 |
 
