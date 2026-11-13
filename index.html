@@ -1163,8 +1163,46 @@
 <body>
 <script>
 const oldLog = console.log;
+// 把参数转成可读文本：数组/普通对象展开成 [1, 2] / {a: 1}，而不是被 join 成 1,2
+function fmt(v, depth, seen) {
+  depth = depth || 0;
+  seen = seen || new Set();
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
+  const t = typeof v;
+  if (t === "string") return depth ? JSON.stringify(v) : v;
+  if (t === "number" || t === "boolean" || t === "bigint") return String(v);
+  if (t === "symbol") return v.toString();
+  if (t === "function") return "[Function: " + (v.name || "anonymous") + "]";
+  if (t !== "object") return String(v);
+  if (seen.has(v)) return "[Circular]";
+  if (depth >= 4) return Array.isArray(v) ? "[Array]" : "[Object]";
+  try {
+    if (Array.isArray(v)) {
+      if (!v.length) return "[]";
+      seen.add(v);
+      const out = "[" + v.map(function (item) { return fmt(item, depth + 1, seen); }).join(", ") + "]";
+      seen.delete(v);
+      return out;
+    }
+    if (v instanceof Date) return v.toString();
+    if (v instanceof Error) return v.name + ": " + v.message;
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return String(v);
+    const keys = Object.keys(v);
+    if (!keys.length) return "{}";
+    seen.add(v);
+    const out = "{" + keys.map(function (k) { return k + ": " + fmt(v[k], depth + 1, seen); }).join(", ") + "}";
+    seen.delete(v);
+    return out;
+  } catch (e) {
+    return String(v);
+  }
+}
 console.log = function(...args) {
-  window.parent.postMessage({type:'log', data:args.join(' ')}, '*');
+  const parts = [];
+  for (let i = 0; i < args.length; i++) parts.push(fmt(args[i], 0, null));
+  window.parent.postMessage({type:'log', data:parts.join(' ')}, '*');
   oldLog.apply(console, args);
 };
 window.onerror = function(msg,url,line,col,err){
