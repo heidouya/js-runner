@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <!--
+    第 12 章示例：依赖按需加载版本
+    与根目录 index.html 的差别只有三处：
+
+      1. acorn / acorn-loose 不再放在 head 里 defer，
+         改成首屏 load 之后用 requestIdleCallback 动态注入
+      2. Prettier 三个模块从顶部静态 import 改成点「格式化」时才 import()
+      3. 格式化按钮在加载期间禁用并显示「格式化中…」
+
+    功能与根目录版本完全一致。这个文件只用于对比首屏请求数和首次格式化的等待，
+    不要在这里改功能，改了就把它同步回根目录版本。
+  -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JS在线运行工具</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/monokai.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/default.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.css">
+
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/show-hint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/hint/javascript-hint.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/edit/closebrackets.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/comment/comment.js"></script>
+  <!-- acorn 不再在这里加载：见文件末尾的 loadAcornWhenIdle() -->
+
+  <style>
+    :root {
+      --editor-font-size: 25px;
+      --console-font-size: 14px;
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      height: 100vh;
+      background-color: #121212;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      overflow: hidden;
+      transition: background 0.3s, color 0.3s;
+    }
+    body.light-mode {
+      background-color: #ffffff;
+      color: #222;
+    }
+    .container {
+      width: 50%;
+      height: 100%;
+      margin: 0 auto;
+      padding: 18px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap:12px;
+    }
+    h2 {
+      font-weight: 500;
+      font-size: 22px;
+    }
+    .btn-group {
+      display: flex;
+      gap:8px;
+    }
+    button {
+      padding: 6px 12px;
+      font-size:14px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background:#333;
+      color:#ddd;
+    }
+    body.light-mode button {
+      background:#e5e5e5;
+      color:#222;
+    }
+    button:hover {
+      background:#444;
+    }
+    body.light-mode button:hover {
+      background:#d8d8d8;
+    }
+    #fileInput {
+      display: none;
+    }
+    #settingsBtn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    /* 设置弹窗 */
+    .modal-mask {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 999;
+    }
+    .modal-mask.show {
+      display: flex;
+    }
+    .settings-modal {
+      width: 440px;
+      max-width: calc(100vw - 32px);
+      background: #1e1e1e;
+      color: #eee;
+      border: 1px solid #333;
+      border-radius: 10px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+    }
+    body.light-mode .settings-modal {
+      background: #ffffff;
+      color: #222;
+      border-color: #ccc;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    }
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #333;
+      font-size: 16px;
+      font-weight: 500;
+    }
+    body.light-mode .settings-header {
+      border-color: #e5e5e5;
+    }
+    .icon-btn {
+      background: transparent;
+      color: inherit;
+      padding: 2px 8px;
+      font-size: 16px;
+      line-height: 1;
+      border-radius: 4px;
+    }
+    .icon-btn:hover {
+      background: #333;
+    }
+    body.light-mode .icon-btn:hover {
+      background: #eee;
+    }
+    .settings-body {
+      padding: 2px 16px 16px;
+    }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 0;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    body.light-mode .setting-row {
+      border-color: #eee;
+    }
+    .setting-row:last-child {
+      border-bottom: none;
+    }
+    .setting-label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 15px;
+    }
+    .setting-desc {
+      font-size: 12px;
+      color: #8f8f8f;
+    }
+    body.light-mode .setting-desc {
+      color: #777;
+    }
+    .setting-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .switch input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .switch-slider {
+      position: absolute;
+      inset: 0;
+      background: #444;
+      border-radius: 999px;
+      transition: background 0.2s;
+    }
+    .switch-slider::before {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      left: 3px;
+      top: 3px;
+      background: #ddd;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .switch input:checked + .switch-slider {
+      background: #4ade80;
+    }
+    .switch input:checked + .switch-slider::before {
+      transform: translateX(18px);
+      background: #111;
+    }
+    body.light-mode .switch-slider {
+      background: #ccc;
+    }
+    body.light-mode .switch input:checked + .switch-slider {
+      background: #22c55e;
+    }
+    body.light-mode .switch input:checked + .switch-slider::before {
+      background: #fff;
+    }
+    .switch input:focus-visible + .switch-slider {
+      outline: 2px solid #4ade80;
+      outline-offset: 2px;
+    }
+    /* 清空确认弹窗 */
+    .confirm-modal {
+      width: 380px;
+    }
+    .confirm-body {
+      padding: 18px 16px;
+      font-size: 14px;
+      line-height: 1.65;
+      color: #ccc;
+    }
+    body.light-mode .confirm-body {
+      color: #444;
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 0 16px 16px;
+    }
+    .danger-btn {
+      background: #b91c1c;
+      color: #fff;
+    }
+    .danger-btn:hover {
+      background: #dc2626;
+    }
+    body.light-mode button.danger-btn {
+      background: #dc2626;
+      color: #fff;
+    }
+    body.light-mode button.danger-btn:hover {
+      background: #b91c1c;
+    }
+    .stepper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .step-btn {
+      width: 32px;
+      padding: 4px 0;
+      font-size: 15px;
+      line-height: 1;
+      text-align: center;
+    }
+    .step-value {
+      min-width: 52px;
+      text-align: center;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+    #cm-editor {
+      flex: 1;
+      border: 1px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    body.light-mode #cm-editor {
+      border-color:#ccc;
+    }
+    .CodeMirror {
+      height: 100%;
+      font-size: var(--editor-font-size) !important;
+      line-height: 1.45 !important;
+      font-family: Consolas, Monaco, "Courier New", monospace !important;
+    }
+    .CodeMirror-hint {
+      font-size:16px;
+    }
+    .console-wrap {
+      height: 200px;
+      display: flex;
+      flex-direction: column;
+    }
+    .console-title-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: #222;
+      border: 1px solid #333;
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+    }
+    body.light-mode .console-title-bar {
+      background:#eee;
+      border-color:#ccc;
+    }
+    .console-title {
+      color: #aaa;
+      font-size: 14px;
+    }
+    body.light-mode .console-title {
+      color:#555;
+    }
+    #clearBtn {
+      padding: 4px 10px;
+      font-size: 13px;
+    }
+    #console {
+      flex: 1;
+      background: #111;
+      color: #4ade80;
+      border: 1px solid #333;
+      border-radius: 0 0 8px 8px;
+      padding: 10px 14px;
+      overflow-y: auto;
+      font-family: Consolas, monospace;
+      white-space: pre-wrap;
+      font-size: var(--console-font-size);
+    }
+    body.light-mode #console {
+      background:#f8f8f8;
+      color:#208838;
+      border-color:#ccc;
+    }
+    /* ===== 移动端适配：只在窄屏生效，桌面布局不受影响 ===== */
+    @media (max-width: 768px) {
+      .container {
+        width: 100%;
+        padding: 10px 12px;
+        gap: 8px;
+      }
+      .header-bar {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      h2 {
+        font-size: 18px;
+      }
+      .btn-group {
+        gap: 6px;
+      }
+      button {
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+      .console-wrap {
+        height: 150px;
+      }
+      #console {
+        padding: 8px 10px;
+      }
+      .settings-modal {
+        width: 100%;
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+      }
+      .CodeMirror-hint {
+        font-size: 14px;
+      }
+    }
+    /* ===== 滚动条样式：贴合暗色 / 浅色主题 ===== */
+    #console::-webkit-scrollbar,
+    #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar,
+    #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    #console::-webkit-scrollbar-track,
+    #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-track,
+    #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #console::-webkit-scrollbar-thumb,
+    #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-thumb,
+    #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar-thumb {
+      background-color: #3c3c3c;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    #console::-webkit-scrollbar-thumb:hover,
+    #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-thumb:hover,
+    #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar-thumb:hover {
+      background-color: #585858;
+    }
+    #console::-webkit-scrollbar-corner,
+    #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+    body.light-mode #console::-webkit-scrollbar-thumb,
+    body.light-mode #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-thumb,
+    body.light-mode #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar-thumb {
+      background-color: #cfcfcf;
+    }
+    body.light-mode #console::-webkit-scrollbar-thumb:hover,
+    body.light-mode #cm-editor .CodeMirror-vscrollbar::-webkit-scrollbar-thumb:hover,
+    body.light-mode #cm-editor .CodeMirror-hscrollbar::-webkit-scrollbar-thumb:hover {
+      background-color: #b3b3b3;
+    }
+    /* Firefox 走标准属性 */
+    #console,
+    #cm-editor .CodeMirror-vscrollbar,
+    #cm-editor .CodeMirror-hscrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: #3c3c3c transparent;
+    }
+    body.light-mode #console,
+    body.light-mode #cm-editor .CodeMirror-vscrollbar,
+    body.light-mode #cm-editor .CodeMirror-hscrollbar {
+      scrollbar-color: #cfcfcf transparent;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <h2>JS 在线运行工具</h2>
+      <div class="btn-group">
+        <button id="runBtn">运行</button>
+        <button id="clearEditor">清空</button>
+        <button id="formatCode">格式化</button>
+        <button id="settingsBtn">设置</button>
+      </div>
+    </div>
+    <div id="cm-editor"></div>
+    <div class="console-wrap">
+      <div class="console-title-bar">
+        <span class="console-title">控制台输出</span>
+        <button id="clearBtn">清空控制台</button>
+      </div>
+      <div id="console"></div>
+    </div>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div class="modal-mask" id="settingsMask">
+    <div class="settings-modal">
+      <div class="settings-header">
+        <span>设置</span>
+        <button id="closeSettings" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-row">
+          <div class="setting-label">
+            编辑器字体大小
+            <span class="setting-desc">代码区字号，12–48 px</span>
+          </div>
+          <div class="stepper">
+            <button class="step-btn" id="editorFontMinus" title="减小字号">−</button>
+            <span class="step-value" id="editorFontValue">25px</span>
+            <button class="step-btn" id="editorFontPlus" title="增大字号">+</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            控制台字体大小
+            <span class="setting-desc">输出区字号，10–28 px</span>
+          </div>
+          <div class="stepper">
+            <button class="step-btn" id="consoleFontMinus" title="减小字号">−</button>
+            <span class="step-value" id="consoleFontValue">14px</span>
+            <button class="step-btn" id="consoleFontPlus" title="增大字号">+</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            修改后自动运行
+            <span class="setting-desc">关闭后修改代码不再自动执行</span>
+          </div>
+          <div class="setting-actions">
+            <label class="switch" title="修改后自动运行">
+              <input type="checkbox" id="autoRunToggle" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            编辑器主题
+            <span class="setting-desc" id="themeDesc">当前：暗黑</span>
+          </div>
+          <div class="setting-actions">
+            <button id="toggleTheme">切换浅色/暗黑</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            代码文件
+            <span class="setting-desc">导入本地 .js 文件，或把当前代码按当前时间命名保存</span>
+          </div>
+          <div class="setting-actions">
+            <button id="importJs">导入JS</button>
+            <button id="saveJs">保存JS</button>
+            <input type="file" id="fileInput" accept=".js">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 清空确认弹窗 -->
+  <div class="modal-mask" id="confirmMask">
+    <div class="settings-modal confirm-modal">
+      <div class="settings-header">
+        <span>确认清空</span>
+        <button id="closeConfirm" class="icon-btn" title="关闭">✕</button>
+      </div>
+      <div class="confirm-body">
+        当前代码和控制台输出都会被清空，且无法恢复，确定要清空吗？
+      </div>
+      <div class="modal-footer">
+        <button id="confirmCancel">取消</button>
+        <button id="confirmClear" class="danger-btn">确定清空</button>
+      </div>
+    </div>
+  </div>
+
+<script type="module">
+  // 第 12 章示例：Prettier 体积较大（babel 插件 1MB+），改成点「格式化」时才加载，
+  // 首屏不再为它付出下载与解析成本；加载过一次后会复用
+  let prettierBundle = null;
+  async function loadPrettier() {
+    if (!prettierBundle) {
+      const [prettier, babel, estree] = await Promise.all([
+        import("https://unpkg.com/prettier@3.3.2/standalone.mjs"),
+        import("https://unpkg.com/prettier@3.3.2/plugins/babel.mjs"),
+        import("https://unpkg.com/prettier@3.3.2/plugins/estree.mjs")
+      ]);
+      prettierBundle = { prettier, babel, estree };
+    }
+    return prettierBundle;
+  }
+
+  // 容错解析器（acorn）只在补全时需要，放到首屏渲染完成后再加载，
+  // 没加载完时补全会自动退回正则方案
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = src;
+      el.onload = () => resolve();
+      el.onerror = () => reject(new Error("script load failed: " + src));
+      document.head.appendChild(el);
+    });
+  }
+  function loadAcornWhenIdle() {
+    const start = () => {
+      loadScript("https://cdn.jsdelivr.net/npm/acorn@8.14.0/dist/acorn.js")
+        .then(() => loadScript("https://cdn.jsdelivr.net/npm/acorn-loose@8.4.0/dist/acorn-loose.js"))
+        .catch(() => {
+          // 加载失败保持正则方案，不影响补全可用性
+        });
+    };
+    if (window.requestIdleCallback) {
+      window.requestIdleCallback(start, { timeout: 2000 });
+    } else {
+      setTimeout(start, 500);
+    }
+  }
+  if (document.readyState === "complete") {
+    loadAcornWhenIdle();
+  } else {
+    window.addEventListener("load", loadAcornWhenIdle, { once: true });
+  }
+
+  const STORAGE_KEY = "js_runner_code";
+  const THEME_KEY = "js_runner_theme";
+  const defaultCode = `console.log("编辑器默认自动运行代码，可以在设置页面进行修改~");
+`;
+
+  const savedCode = localStorage.getItem(STORAGE_KEY);
+  const savedTheme = localStorage.getItem(THEME_KEY);
+
+  const editor = CodeMirror(document.getElementById('cm-editor'), {
+    value: savedCode ?? defaultCode,
+    mode: "javascript",
+    theme: savedTheme ?? "monokai",
+    lineWrapping: true,
+    lineNumbers: true,
+    tabSize: 2,
+    indentWithTabs: false,
+    autoCloseBrackets: true,
+    hintOptions: {
+      completeSingle: false
+    },
+    extraKeys: {
+      "Ctrl-Space": "autocomplete",
+      "Ctrl-/": "toggleComment",
+      "Cmd-/": "toggleComment",
+      "Tab": function(cm) {
+        if (cm.somethingSelected()) {
+          cm.indentSelection("add");
+        } else {
+          cm.replaceSelection("  ", "end");
+        }
+      },
+      "Shift-Tab": function(cm) {
+        cm.indentSelection("subtract");
+      }
+    }
+  });
+
+  // 首次进入（本地没有保存过代码）时默认内容为 defaultCode，
+  // 让光标落在第二行并聚焦编辑器；若页面在后台标签打开，浏览器会忽略脚本聚焦，
+  // 等窗口首次获得焦点后再聚焦一次
+  const isFirstVisit = savedCode === null;
+
+  if (isFirstVisit) {
+    editor.setCursor({ line: 1, ch: 0 });
+  }
+
+  if (isFirstVisit || savedCode === "") {
+    const focusEditor = () => {
+      editor.focus();
+      if (isFirstVisit) editor.setCursor({ line: 1, ch: 0 });
+    };
+    if (document.hasFocus()) {
+      focusEditor();
+    } else {
+      window.addEventListener("focus", focusEditor, { once: true });
+    }
+  }
+
+  let isDark = !(savedTheme === "default");
+  if (!isDark) {
+    document.body.classList.add("light-mode");
+  }
+
+  // ===== 设置弹窗 =====
+  const settingsBtn = document.getElementById("settingsBtn");
+  const settingsMask = document.getElementById("settingsMask");
+  const closeSettingsBtn = document.getElementById("closeSettings");
+  const themeDesc = document.getElementById("themeDesc");
+
+  function updateThemeDesc() {
+    themeDesc.textContent = "当前：" + (isDark ? "暗黑" : "浅色");
+  }
+  function openSettings() {
+    updateThemeDesc();
+    settingsMask.classList.add("show");
+  }
+  function closeSettings() {
+    settingsMask.classList.remove("show");
+  }
+  settingsBtn.onclick = openSettings;
+  closeSettingsBtn.onclick = closeSettings;
+  settingsMask.onclick = (e) => {
+    if (e.target === settingsMask) closeSettings();
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && settingsMask.classList.contains("show")) {
+      closeSettings();
+    }
+  });
+  updateThemeDesc();
+
+  // ===== 字体大小设置 =====
+  const EDITOR_FONT_KEY = "js_runner_editor_font";
+  const CONSOLE_FONT_KEY = "js_runner_console_font";
+  const FONT_RANGE = {
+    editor: { min: 12, max: 48, def: 25 },
+    console: { min: 10, max: 28, def: 14 }
+  };
+
+  const editorFontValueEl = document.getElementById("editorFontValue");
+  const consoleFontValueEl = document.getElementById("consoleFontValue");
+  const editorFontMinusBtn = document.getElementById("editorFontMinus");
+  const editorFontPlusBtn = document.getElementById("editorFontPlus");
+  const consoleFontMinusBtn = document.getElementById("consoleFontMinus");
+  const consoleFontPlusBtn = document.getElementById("consoleFontPlus");
+
+  function readFont(key, conf) {
+    const raw = parseInt(localStorage.getItem(key), 10);
+    if (Number.isNaN(raw)) return conf.def;
+    return Math.min(conf.max, Math.max(conf.min, raw));
+  }
+
+  let editorFontSize = readFont(EDITOR_FONT_KEY, FONT_RANGE.editor);
+  let consoleFontSize = readFont(CONSOLE_FONT_KEY, FONT_RANGE.console);
+
+  function applyFontSizes() {
+    document.documentElement.style.setProperty("--editor-font-size", editorFontSize + "px");
+    document.documentElement.style.setProperty("--console-font-size", consoleFontSize + "px");
+    editorFontValueEl.textContent = editorFontSize + "px";
+    consoleFontValueEl.textContent = consoleFontSize + "px";
+    // 字号变化后重算 CodeMirror 的行高与渲染尺寸
+    editor.refresh();
+  }
+
+  function stepFont(target, delta) {
+    const conf = FONT_RANGE[target];
+    const current = target === "editor" ? editorFontSize : consoleFontSize;
+    const next = Math.min(conf.max, Math.max(conf.min, current + delta));
+    if (next === current) return;
+    if (target === "editor") {
+      editorFontSize = next;
+      localStorage.setItem(EDITOR_FONT_KEY, String(next));
+    } else {
+      consoleFontSize = next;
+      localStorage.setItem(CONSOLE_FONT_KEY, String(next));
+    }
+    applyFontSizes();
+  }
+
+  editorFontMinusBtn.onclick = () => stepFont("editor", -1);
+  editorFontPlusBtn.onclick = () => stepFont("editor", 1);
+  consoleFontMinusBtn.onclick = () => stepFont("console", -1);
+  consoleFontPlusBtn.onclick = () => stepFont("console", 1);
+
+  applyFontSizes();
+
+  // ===== 自动运行开关 =====
+  const AUTORUN_KEY = "js_runner_autorun";
+  const autoRunToggle = document.getElementById("autoRunToggle");
+
+  let autoRun = localStorage.getItem(AUTORUN_KEY) !== "off";
+  autoRunToggle.checked = autoRun;
+
+  autoRunToggle.onchange = () => {
+    autoRun = autoRunToggle.checked;
+    localStorage.setItem(AUTORUN_KEY, autoRun ? "on" : "off");
+    if (!autoRun) clearTimeout(runTimer);
+  };
+
+  // 只在输入标识符字符（字母、下划线、$、汉字）时弹出补全，
+  // 输入数字、分号、冒号、句号、括号、空白等字符时不触发
+  // （数字开不了标识符，写数值时弹窗只会干扰）
+  // 例外：标识符后输入 "."（成员访问）时要弹出成员提示
+  const HINT_TRIGGER = /^[A-Za-z_$\u4e00-\u9fff]$/;
+  const MEMBER_DOT = /[A-Za-z_$][\w$]*\.$/;
+
+  editor.on('inputRead', function(cm, change) {
+    if (cm.state.completeActive) return;
+    const typed = change.text.join("");
+    if (typed === ".") {
+      const cur = cm.getCursor();
+      const before = cm.getLine(cur.line).slice(0, cur.ch);
+      if (MEMBER_DOT.test(before)) cm.showHint();
+      return;
+    }
+    if (!HINT_TRIGGER.test(typed)) return;
+    cm.showHint();
+  });
+
+  // ===== 补全候选里加入当前文档自己声明的变量 / 函数 =====
+  // CodeMirror 自带的 JS 提示只覆盖全局对象、关键字和少量局部作用域，
+  // 这里收集全文的 const/let/var、function/class 名、参数、catch 参数等，合并进候选列表。
+  // acorn-loose 可用时走真实语法树（更准），加载失败则退回正则扫描。
+  const baseJsHint = CodeMirror.hint.javascript;
+
+  function collectNamesWithRegex(code) {
+    const names = new Set();
+    const takeDeclarators = (raw) => {
+      String(raw).split(",").forEach((piece) => {
+        const left = piece.split("=")[0];
+        const ids = left.match(/[A-Za-z_$][\w$]*/g) || [];
+        ids.forEach((id) => names.add(id));
+      });
+    };
+
+    let m;
+    // const / let / var（含逗号连声明、解构）
+    const declRe = /\b(?:const|let|var)\s+([^;\n]+)/g;
+    while ((m = declRe.exec(code))) takeDeclarators(m[1]);
+
+    // function / class 名字
+    const fnRe = /\b(?:function|class)\s+([A-Za-z_$][\w$]*)/g;
+    while ((m = fnRe.exec(code))) names.add(m[1]);
+
+    // 函数参数
+    const paramRe = /\bfunction\s*[A-Za-z_$]*\s*\(([^)]*)\)/g;
+    while ((m = paramRe.exec(code))) takeDeclarators(m[1]);
+
+    // 箭头函数参数
+    const arrowRe = /(?:\(([^()]*)\)|[A-Za-z_$][\w$]*)\s*=>/g;
+    while ((m = arrowRe.exec(code))) {
+      if (m[1]) {
+        takeDeclarators(m[1]);
+      } else {
+        const id = m[0].match(/[A-Za-z_$][\w$]*/);
+        if (id) names.add(id[0]);
+      }
+    }
+
+    return names;
+  }
+
+  // 从绑定模式（Identifier / 解构 / 默认值 / rest）里取出所有被声明的名字
+  function addPatternIds(pattern, out) {
+    if (!pattern || typeof pattern.type !== "string") return;
+    switch (pattern.type) {
+      case "Identifier":
+        out.add(pattern.name);
+        break;
+      case "ObjectPattern":
+        pattern.properties.forEach((p) => {
+          addPatternIds(p.type === "RestElement" ? p.argument : p.value, out);
+        });
+        break;
+      case "ArrayPattern":
+        pattern.elements.forEach((el) => addPatternIds(el, out));
+        break;
+      case "AssignmentPattern":
+        addPatternIds(pattern.left, out);
+        break;
+      case "RestElement":
+        addPatternIds(pattern.argument, out);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function ensureSet(map, key) {
+    let set = map.get(key);
+    if (!set) {
+      set = new Set();
+      map.set(key, set);
+    }
+    return set;
+  }
+
+  // 对象键 / 类成员的显示名
+  function keyName(node) {
+    if (!node) return null;
+    if (node.type === "Identifier") return node.name;
+    if (node.type === "Literal") {
+      if (typeof node.value === "string" || typeof node.value === "number") return String(node.value);
+    }
+    return null;
+  }
+
+  // 对象字面量的键名 -> 变量名
+  function addObjectKeys(objNode, varName, members) {
+    const set = ensureSet(members, varName);
+    (objNode.properties || []).forEach((p) => {
+      if (p && p.type === "Property" && !p.computed) {
+        const k = keyName(p.key);
+        if (k) set.add(k);
+      }
+    });
+  }
+
+  // 类的方法 / 字段名 -> 类名，以及赋值给变量的匿名类
+  function addClassMembers(classNode, varName, classMembers, members) {
+    const set = new Set();
+    const body = (classNode.body && classNode.body.body) || [];
+    body.forEach((m) => {
+      if (!m) return;
+      if (m.type !== "MethodDefinition" && m.type !== "PropertyDefinition") return;
+      if (m.type === "MethodDefinition" && m.kind === "constructor") return;
+      if (m.key && m.key.type === "PrivateIdentifier") return;
+      const k = keyName(m.key);
+      if (k) set.add(k);
+    });
+    if (classNode.id && classNode.id.name) {
+      classMembers.set(classNode.id.name, set);
+      const target = ensureSet(members, classNode.id.name);
+      set.forEach((k) => target.add(k));
+    }
+    if (varName) {
+      const target = ensureSet(members, varName);
+      set.forEach((k) => target.add(k));
+    }
+  }
+
+  // 内建构造函数的实例（new Date() / new Map() 等），成员名从原型上现取
+  const BUILTIN_CTORS = new Set(["Date", "Array", "Map", "Set", "WeakMap", "WeakSet", "RegExp", "Promise", "Error", "TypeError", "RangeError"]);
+  const builtinMemberCache = new Map();
+  function getBuiltinMembers(ctorName) {
+    if (builtinMemberCache.has(ctorName)) return builtinMemberCache.get(ctorName);
+    const set = new Set();
+    const ctor = window[ctorName];
+    if (ctor && ctor.prototype) {
+      Object.getOwnPropertyNames(ctor.prototype).forEach((n) => {
+        if (n !== "constructor") set.add(n);
+      });
+    }
+    builtinMemberCache.set(ctorName, set);
+    return set;
+  }
+
+  function collectWithAst(code) {
+    const names = new Set();
+    const members = new Map();       // 变量名 -> 可用成员名
+    const classMembers = new Map();  // 类名 -> 成员名
+    const instances = [];            // [变量名, 类名]
+    const builtins = new Map();      // 变量名 -> 内建类型名
+    const ast = window.acorn.loose.parse(code, { ecmaVersion: "latest" });
+    const stack = [ast];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || typeof node.type !== "string") continue;
+      switch (node.type) {
+        case "VariableDeclarator":
+          addPatternIds(node.id, names);
+          if (node.id.type === "Identifier" && node.init) {
+            if (node.init.type === "ObjectExpression") {
+              addObjectKeys(node.init, node.id.name, members);
+            } else if (node.init.type === "NewExpression" && node.init.callee && node.init.callee.type === "Identifier") {
+              const ctorName = node.init.callee.name;
+              // Date / Map 这类内建构造出来的实例，成员直接从运行时原型取
+              if (BUILTIN_CTORS.has(ctorName)) {
+                builtins.set(node.id.name, ctorName);
+              } else {
+                instances.push([node.id.name, ctorName]);
+              }
+            } else if (node.init.type === "ArrayExpression" || node.init.type === "ArrayPattern") {
+              builtins.set(node.id.name, "Array");
+            } else if (node.init.type === "ClassExpression") {
+              addClassMembers(node.init, node.id.name, classMembers, members);
+            }
+          }
+          break;
+        case "FunctionDeclaration":
+        case "FunctionExpression":
+        case "ArrowFunctionExpression":
+          if (node.id) names.add(node.id.name);
+          (node.params || []).forEach((p) => addPatternIds(p, names));
+          break;
+        case "ClassDeclaration":
+        case "ClassExpression":
+          if (node.id) names.add(node.id.name);
+          addClassMembers(node, null, classMembers, members);
+          break;
+        case "AssignmentExpression":
+          // cfg.newProp = 1 这类后补属性也收进成员表
+          if (
+            node.left &&
+            node.left.type === "MemberExpression" &&
+            !node.left.computed &&
+            node.left.object &&
+            node.left.object.type === "Identifier" &&
+            node.left.property
+          ) {
+            const prop = keyName(node.left.property);
+            const objName = node.left.object.name;
+            if (prop && objName) ensureSet(members, objName).add(prop);
+          }
+          break;
+        case "CatchClause":
+          addPatternIds(node.param, names);
+          break;
+        case "ImportDeclaration":
+          (node.specifiers || []).forEach((s) => {
+            if (s.local) names.add(s.local.name);
+          });
+          break;
+        default:
+          break;
+      }
+      for (const key in node) {
+        if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "range") continue;
+        const val = node[key];
+        if (Array.isArray(val)) {
+          for (let i = 0; i < val.length; i++) {
+            const child = val[i];
+            if (child && typeof child.type === "string") stack.push(child);
+          }
+        } else if (val && typeof val === "object" && typeof val.type === "string") {
+          stack.push(val);
+        }
+      }
+    }
+
+    instances.forEach((pair) => {
+      const set = classMembers.get(pair[1]);
+      if (set) {
+        const target = ensureSet(members, pair[0]);
+        set.forEach((k) => target.add(k));
+      }
+    });
+
+    return { names, members, builtins };
+  }
+
+  const userDataCache = { gen: -1, astReady: false, names: new Set(), members: null, builtins: null };
+  function getUserData(cm) {
+    const gen = cm.changeGeneration();
+    const astReady = !!(window.acorn && window.acorn.loose);
+    if (userDataCache.gen === gen && userDataCache.astReady === astReady) {
+      return userDataCache;
+    }
+    userDataCache.gen = gen;
+    userDataCache.astReady = astReady;
+    userDataCache.members = null;
+    userDataCache.builtins = null;
+    userDataCache.names = collectNamesWithRegex(cm.getValue());
+    if (astReady) {
+      try {
+        const data = collectWithAst(cm.getValue());
+        userDataCache.names = data.names;
+        userDataCache.members = data.members;
+        userDataCache.builtins = data.builtins;
+      } catch (e) {
+        // 解析器异常时退回正则结果，不影响补全可用性
+      }
+    }
+    return userDataCache;
+  }
+
+  CodeMirror.registerHelper("hint", "javascript", function(cm, options) {
+    const base = (baseJsHint && baseJsHint(cm, options)) || { list: [], from: cm.getCursor() };
+    const cur = cm.getCursor();
+    const before = cm.getLine(cur.line).slice(0, cur.ch);
+    const prefixMatch = /[A-Za-z_$][\w$]*$/.exec(before);
+    const prefix = prefixMatch ? prefixMatch[0] : "";
+    const head = before.slice(0, before.length - prefix.length);
+
+    // 注释、字符串里不补全自定义名字
+    const tokenType = cm.getTokenAt(cur).type || "";
+    if (/comment|string/.test(tokenType)) return base;
+
+    const baseList = base.list || [];
+    const existing = new Set(baseList.map((it) => (typeof it === "string" ? it : it.text)));
+    const list = baseList.slice();
+    const data = getUserData(cm);
+
+    // 对象成员访问（foo.bar）：用语法树反查 foo 声明的对象键 / 类成员 / 内建实例原型
+    if (head.endsWith(".")) {
+      const ownerMatch = /([A-Za-z_$][\w$]*)$/.exec(head.slice(0, -1));
+      if (!ownerMatch) return base;
+      let set = data.members ? data.members.get(ownerMatch[1]) : null;
+      if (!set && data.builtins) {
+        const ctor = data.builtins.get(ownerMatch[1]);
+        if (ctor) set = getBuiltinMembers(ctor);
+      }
+      if (!set) return base;
+      set.forEach((name) => {
+        if (existing.has(name)) return;
+        if (prefix && !name.startsWith(prefix)) return;
+        existing.add(name);
+        list.push(name);
+      });
+      if (list.length === baseList.length) return base;
+      return {
+        list,
+        from: CodeMirror.Pos(cur.line, cur.ch - prefix.length),
+        to: cur
+      };
+    }
+
+    data.names.forEach((name) => {
+      // 名字已经完整敲出来（与当前前缀完全一致）就不再作为候选
+      if (name === prefix || existing.has(name)) return;
+      if (prefix && !name.startsWith(prefix)) return;
+      existing.add(name);
+      list.push(name);
+    });
+
+    if (list.length === baseList.length) return base;
+
+    return {
+      list,
+      from: base.from || CodeMirror.Pos(cur.line, cur.ch - prefix.length),
+      to: base.to || cur
+    };
+  });
+
+  const consoleBox = document.getElementById("console");
+  const clearBtn = document.getElementById("clearBtn");
+  const runBtn = document.getElementById("runBtn");
+  const clearEditorBtn = document.getElementById("clearEditor");
+  const saveJsBtn = document.getElementById("saveJs");
+  const toggleThemeBtn = document.getElementById("toggleTheme");
+  const importJsBtn = document.getElementById("importJs");
+  const fileInput = document.getElementById("fileInput");
+  const formatCodeBtn = document.getElementById("formatCode");
+
+  let runTimer = null;
+  let iframe = null;
+
+  function appendLog(text) {
+    consoleBox.textContent += text + '\n';
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+  }
+  function clearConsole() {
+    consoleBox.textContent = '';
+  }
+  clearBtn.onclick = clearConsole;
+
+  editor.on('change', () => {
+    localStorage.setItem(STORAGE_KEY, editor.getValue());
+    clearTimeout(runTimer);
+    if (!autoRun) return;
+    runTimer = setTimeout(runCode, 350);
+  })
+
+  importJsBtn.onclick = () => {
+    fileInput.click();
+  }
+  fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      editor.setValue(evt.target.result);
+      fileInput.value = '';
+      closeSettings();
+    }
+    reader.readAsText(file);
+  }
+
+  // 修复：async + 正确传入插件
+  formatCodeBtn.onclick = async () => {
+    const btnText = formatCodeBtn.textContent;
+    try {
+      formatCodeBtn.disabled = true;
+      formatCodeBtn.textContent = "格式化中…";
+      const raw = editor.getValue();
+      const { prettier, babel, estree } = await loadPrettier();
+      const formatted = await prettier.format(raw, {
+        parser: "babel",
+        plugins: [babel, estree],
+        tabWidth: 2,
+        semi: true,
+        singleQuote: false
+      });
+      editor.setValue(formatted);
+    } catch (err) {
+      appendLog('[格式化失败] 语法错误：' + err.message);
+    } finally {
+      formatCodeBtn.disabled = false;
+      formatCodeBtn.textContent = btnText;
+    }
+  }
+
+  clearEditorBtn.onclick = () => {
+    openConfirm();
+  }
+
+  const confirmMask = document.getElementById("confirmMask");
+  const closeConfirmBtn = document.getElementById("closeConfirm");
+  const confirmCancelBtn = document.getElementById("confirmCancel");
+  const confirmClearBtn = document.getElementById("confirmClear");
+
+  function openConfirm() {
+    confirmMask.classList.add("show");
+    // 默认聚焦「取消」，避免误按回车直接清空
+    confirmCancelBtn.focus();
+  }
+  function closeConfirm() {
+    confirmMask.classList.remove("show");
+    clearEditorBtn.focus();
+  }
+
+  closeConfirmBtn.onclick = closeConfirm;
+  confirmCancelBtn.onclick = closeConfirm;
+  confirmMask.onclick = (e) => {
+    if (e.target === confirmMask) closeConfirm();
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && confirmMask.classList.contains("show")) {
+      closeConfirm();
+    }
+  });
+
+  confirmClearBtn.onclick = () => {
+    editor.setValue("");
+    clearConsole();
+    closeConfirm();
+  }
+
+  runBtn.onclick = () => {
+    clearTimeout(runTimer);
+    runCode();
+  }
+
+  saveJsBtn.onclick = () => {
+    const code = editor.getValue();
+    const blob = new Blob([code], {type: "text/plain"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = buildFileName();
+    a.click();
+    URL.revokeObjectURL(url);
+    closeSettings();
+  }
+
+  // 保存文件名：年-月-日-时-分-秒.js，例如 2026-11-11-00-15-30.js
+  function buildFileName() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const date = [d.getFullYear(), pad(d.getMonth() + 1), pad(d.getDate())].join("-");
+    const time = [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join("-");
+    return `${date}-${time}.js`;
+  }
+
+  toggleThemeBtn.onclick = () => {
+    isDark = !isDark;
+    if(isDark){
+      editor.setOption("theme", "monokai");
+      document.body.classList.remove("light-mode");
+      localStorage.setItem(THEME_KEY, "monokai");
+    }else{
+      editor.setOption("theme", "default");
+      document.body.classList.add("light-mode");
+      localStorage.setItem(THEME_KEY, "default");
+    }
+    updateThemeDesc();
+  }
+
+  function runCode() {
+    if (iframe) iframe.remove();
+    iframe = document.createElement('iframe');
+    iframe.sandbox = "allow-scripts";
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+
+    const code = editor.getValue();
+    const html = `
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+const oldLog = console.log;
+// 把参数转成可读文本：数组/普通对象展开成 [1, 2] / {a: 1}，而不是被 join 成 1,2
+function fmt(v, depth, seen) {
+  depth = depth || 0;
+  seen = seen || new Set();
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
+  const t = typeof v;
+  if (t === "string") return depth ? JSON.stringify(v) : v;
+  if (t === "number" || t === "boolean" || t === "bigint") return String(v);
+  if (t === "symbol") return v.toString();
+  if (t === "function") return "[Function: " + (v.name || "anonymous") + "]";
+  if (t !== "object") return String(v);
+  if (seen.has(v)) return "[Circular]";
+  if (depth >= 4) return Array.isArray(v) ? "[Array]" : "[Object]";
+  try {
+    if (Array.isArray(v)) {
+      if (!v.length) return "[]";
+      seen.add(v);
+      const out = "[" + v.map(function (item) { return fmt(item, depth + 1, seen); }).join(", ") + "]";
+      seen.delete(v);
+      return out;
+    }
+    if (v instanceof Date) return v.toString();
+    if (v instanceof Error) return v.name + ": " + v.message;
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return String(v);
+    const keys = Object.keys(v);
+    if (!keys.length) return "{}";
+    seen.add(v);
+    const out = "{" + keys.map(function (k) { return k + ": " + fmt(v[k], depth + 1, seen); }).join(", ") + "}";
+    seen.delete(v);
+    return out;
+  } catch (e) {
+    return String(v);
+  }
+}
+console.log = function(...args) {
+  const parts = [];
+  for (let i = 0; i < args.length; i++) parts.push(fmt(args[i], 0, null));
+  window.parent.postMessage({type:'log', data:parts.join(' ')}, '*');
+  oldLog.apply(console, args);
+};
+window.onerror = function(msg,url,line,col,err){
+  window.parent.postMessage({type:'error', data:msg + ' 行号:'+line}, '*');
+}
+${code}
+<\/script>
+</body>
+</html>
+    `
+    iframe.srcdoc = html;
+  }
+
+  window.addEventListener('message', (e) => {
+    if(e.data.type === 'log'){
+      appendLog('[log] ' + e.data.data);
+    }else if(e.data.type === 'error'){
+      appendLog('[error] ' + e.data.data);
+    }
+  })
+
+  runCode();
+</script>
+</body>
+</html>
