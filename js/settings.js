@@ -104,6 +104,18 @@
       if (!JR.state.autoRun) clearTimeout(JR.state.runTimer);
     };
 
+    // ===== 死循环保护开关（默认关闭）=====
+    var loopGuardToggle = document.getElementById("loopGuardToggle");
+    JR.state.loopGuard = localStorage.getItem(JR.LOOP_GUARD_KEY) === "on";
+    loopGuardToggle.checked = JR.state.loopGuard;
+
+    loopGuardToggle.onchange = function () {
+      JR.state.loopGuard = loopGuardToggle.checked;
+      localStorage.setItem(JR.LOOP_GUARD_KEY, JR.state.loopGuard ? "on" : "off");
+      // 按新设置立即重跑一次，效果马上可见（自动运行关闭时不动）
+      if (JR.state.autoRun) JR.run();
+    };
+
     // ===== 主题切换 =====
     var toggleThemeBtn = document.getElementById("toggleTheme");
     toggleThemeBtn.onclick = function () {

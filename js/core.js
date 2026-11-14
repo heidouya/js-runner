@@ -11,6 +11,12 @@
   JR.AUTORUN_KEY = "js_runner_autorun";
   JR.EDITOR_FONT_KEY = "js_runner_editor_font";
   JR.CONSOLE_FONT_KEY = "js_runner_console_font";
+  JR.LOOP_GUARD_KEY = "js_runner_loop_guard";
+
+  // 死循环保护：同一行循环累计执行超过 1 秒，判定为死循环并指出行号
+  JR.LOOP_GUARD_MS = 1000;
+  // 关闭保护时，执行超过 5 秒只在控制台提示，不终止
+  JR.SLOW_WARN_MS = 5000;
 
   // 字号区间与默认值
   JR.FONT_RANGE = {
@@ -27,7 +33,9 @@
     isDark: true,     // 当前是否深色主题
     autoRun: true,    // 是否自动运行
     runTimer: null,   // 自动运行的防抖定时器
-    iframe: null      // 当前运行的沙箱 iframe
+    worker: null,     // 当前执行代码的 Worker
+    slowTimer: null,  // 关闭死循环保护时，用来提示「执行太久」的计时器
+    loopGuard: false  // 死循环保护开关，默认关闭
   };
 
   // 保存文件名：年-月-日-时-分-秒.js，例如 2026-11-11-00-15-30.js

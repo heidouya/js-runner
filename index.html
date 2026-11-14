@@ -73,6 +73,18 @@
         </div>
         <div class="setting-row">
           <div class="setting-label">
+            死循环保护
+            <span class="setting-desc">开启后循环卡住 1 秒即判定死循环并报出行号；关闭时只在超过 5 秒时提示</span>
+          </div>
+          <div class="setting-actions">
+            <label class="switch" title="死循环保护">
+              <input type="checkbox" id="loopGuardToggle">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
             修改后自动运行
             <span class="setting-desc">关闭后修改代码不再自动执行</span>
           </div>

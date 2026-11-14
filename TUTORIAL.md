@@ -16,10 +16,10 @@
 | 能力 | 说明 |
 | --- | --- |
 | 编辑 | CodeMirror 5，行号、自动补括号、Tab 缩进、`Ctrl-/` 注释 |
-| 运行 | 代码在隔离的 `iframe` 里执行，输出回流到页面 |
+| 运行 | 代码在独立的 `Worker` 里执行，输出回流到页面；死循环保护可选，开启时能指出卡住的循环行号 |
 | 补全 | 全局对象 + 本文档自己声明的变量/函数/参数 + 对象与类成员 + Date 等内建实例成员 |
 | 格式化 | Prettier（babel 解析器），按 2 空格、加分号、双引号重排 |
-| 设置 | 编辑器字号、控制台字号、自动运行开关、深浅主题、导入/导出 .js |
+| 设置 | 编辑器字号、控制台字号、自动运行开关、死循环保护开关、深浅主题、导入/导出 .js |
 | 细节 | 深浅两套配色、自定义滚动条、手机窄屏布局、清空二次确认 |
 
 ### 一次「运行」到底发生了什么
@@ -33,17 +33,22 @@
 CodeMirror（#cm-editor 里的那个编辑器实例）
    │  editor.getValue() 拿到整段字符串
    ▼
-runCode()
-   │  新建一个 iframe，把「拦截 console 的代码 + 你的代码」塞进 srcdoc
+JR.run()
+   │  开启死循环保护时，先用 acorn 给每个循环体插一句 __jrCheck(行号)
+   │  然后新建一个 Worker，把代码交给它执行
    ▼
-iframe 内部（隔离的执行环境）
-   │  console.log 被替换过：先 postMessage 给父页面，再调用原生 log
+Worker 内部（独立线程）
+   │  console.log 被替换过：先 postMessage 给主线程，再调用原生 log
+   │  带插桩时，某行循环累计执行超过 1 秒就抛出，外层 catch 报出行号
    ▼
-父页面（index.html 自己的 window）
-   │  message 事件 → appendLog('[log] ' + 文本)
+主线程
+   │  worker.onmessage → JR.log('[log] ' + 文本)
+   │  保护关闭时：超过 5 秒 → 只提示「可能是死循环，请检查代码是否有误」，不终止
    ▼
 #console 容器末尾追加一行，并滚到底部
 ```
+
+（第 2 章先按 iframe 讲，因为那条路更直观；2.6 会说明为什么最终换成了 Worker，以及死循环是怎么定位到行的。）
 
 补全和格式化走的是另外两条独立链路：
 
@@ -60,7 +65,7 @@ js-runner/
 ├── js/                   ← 按功能拆分的 8 个脚本，普通 <script defer> 按顺序加载
 │   ├── core.js           ← 常量、JR.state、文件名工具
 │   ├── console.js        ← 控制台输出区
-│   ├── runner.js         ← iframe 沙箱运行、自动运行防抖
+│   ├── runner.js         ← Worker 执行、循环插桩（死循环定位）、5 秒提示、自动运行防抖
 │   ├── editor.js         ← CodeMirror 初始化、内容持久化
 │   ├── hint.js           ← 补全触发、声明名收集、成员提示
 │   ├── settings.js       ← 设置弹窗、主题、字号、导入导出、清空确认
@@ -310,16 +315,130 @@ function runCode() {
 
 ### 验证
 
-1. 写 `while(true){}` 再点运行：这一次只是 iframe 里死循环，页面本身还能动、能关
-2. 写 `console.log("a", 1)`：主页面控制台出现 `[log] a 1`
-3. 写 `throw new Error("boom")`：出现 `[error] ... 行号:5`
-4. 写 `var a = 1` 运行后再写 `console.log(typeof a)` 运行：第二次是 `undefined`，说明每次都是干净环境
+1. 写 `console.log("a", 1)`：主页面控制台出现 `[log] a 1`
+2. 写 `throw new Error("boom")`：出现 `[error] ... 行号:5`
+3. 写 `var a = 1` 运行后再写 `console.log(typeof a)` 运行：第二次是 `undefined`，说明每次都是干净环境
+4. 写 `while(true){}` 点运行：**页面会整个卡死**——不是 bug，是下一节要解决的问题
+
+### 2.6 后来发现的问题：iframe 挡不住死循环，怎么办
+
+`while(true){}` 一跑，编辑器、控制台、按钮全都没反应，浏览器连一次重绘都做不了，更不可能弹出提示。
+
+根因不在 iframe 的沙箱能力，而在**线程**：`srcdoc` 出来的 iframe 和父页面共用同一个主线程（`sandbox` 只隔离源，不隔离线程）。死循环把主线程占住，页面自然一起僵住。加多少提示文案都没用——提示画不出来。
+
+#### 第一步：把执行搬到独立线程
+
+```js
+if (JR.state.worker) JR.state.worker.terminate();   // 上一轮直接掐掉
+
+const worker = new Worker(URL.createObjectURL(new Blob([src], {type: 'text/javascript'})));
+worker.postMessage(editor.getValue());
+
+const timer = setTimeout(() => {
+  worker.terminate();
+  JR.log('[警告] 执行超过 3 秒，已强制终止（可能存在死循环）');
+}, 3000);
+
+worker.onmessage = (e) => {
+  if (e.data.type === 'done') clearTimeout(timer);
+  ...
+};
+```
+
+`terminate()` 立即生效，不像 `remove()` 要等当前任务跑完——这正是它能掐死死循环的原因。代价是 Worker 里没有 `document` / `window` / `alert` / `localStorage`。
+
+#### 第二步：3 秒一刀切会误杀正常计算
+
+实测一段 7000 万次的累加循环要跑 4 秒以上，第 3 秒就被终止，结果一个都没打印。**超时阈值定在哪儿都误杀**——因为「跑得久」和「跑不完」在外部看是一样的，停机问题不可判定。
+
+于是改成**可选保护** + 两级阈值：
+
+- 设置里加「死循环保护」开关，默认关闭
+- **关闭**：不终止，也不改源码，执行超过 5 秒只在控制台提示一次「可能是死循环，请检查代码是否有误」
+- **开启**：要给出「卡在哪一行」，光靠超时做不到——主线程拿不到 Worker 运行中的调用栈，Worker 卡住时也发不出心跳。只能用**源码插桩**
+
+所以插桩只在**开启时**做。关闭状态的 5 秒提示指不出行号，这不是遗漏，是取舍：不改源码的好处是用户代码原样执行，也不会挡住正常的长计算。
+
+#### 第三步：循环插桩定位行号
+
+用 acorn 解析一遍源码，在每个 `while` / `for` / `do...while` / `for...of` / `for...in` 的循环体开头插一句：
+
+```js
+// 原文
+while (i < 3) {
+  i = i;
+}
+
+// 插桩后（插入内容不换行，所以行号不变）
+while (i < 3) {if(!(++__jrN & 255))__jrCheck(2);
+  i = i;
+}
+```
+
+```js
+// Worker 里的检查函数：每 256 轮迭代才被调用一次
+var __jrMs = 1000, __jrTripped = false, __jrStat = {}, __jrGuardOn = false, __jrN = 0;
+function __jrCheck(line) {
+  if (__jrTripped) throw new Error("__JR_LOOP__" + line);
+  var now = Date.now();
+  var st = __jrStat[line];
+  if (!st) { __jrStat[line] = { last: now, acc: 0 }; return; }
+  st.acc += now - st.last;
+  st.last = now;
+
+  // 同一行累计超过 1 秒就抛出
+  if (__jrGuardOn && st.acc >= __jrMs) { __jrTripped = true; throw new Error("__JR_LOOP__" + line); }
+}
+```
+
+几个实现细节：
+
+- **按行累计耗时，不按「连续」**：嵌套循环会让内外两层轮流调用检查函数，用「同一行连续执行」的话，外层计时会被内层不断重置，永远检测不到
+- **每 256 轮才调一次**：每轮都调函数会让大循环明显变慢；插桩体里只留 `++__jrN & 255` 这种位运算，几乎没成本
+- **第一次进入某行只记时间戳，不判定**：`__jrStat[line]` 首次出现时只记 `last`，第二次调用才开始累计，避免「刚进循环就误判」
+- **单语句循环体要补花括号**：`for (;;) i++;` 得改成 `for (;;) { if(...)__jrCheck(2); i++; }`，`var` 的作用域不变
+- **`__jrTripped` 粘滞标记**：用户代码自己写了 `try/catch` 包住循环时，第一次抛会被他吞掉，标记置位后每次检查都再抛，最终一定会逃出来
+- **插桩失败要能降级**：代码本身有语法错误时 acorn 解析不出来，就按原样执行
+
+#### 第四步：eval 太慢，必须换成 new Function
+
+这一步是实测踩出来的：插桩和行号都正常，但 7000 万次的循环跑了一分钟还没结束。
+
+原因是**在 Worker 里用 `eval` 执行用户代码**——`eval` 里的代码 V8 基本不做优化，同一段循环：
+
+- `eval(code)`：十几秒，甚至更久
+- `new Function(code)()`：几十毫秒（关保护 81ms，开保护带插桩 182ms）
+
+所以执行改成 `(new Function(data.code))()`。注意 `new Function` 会在源码外加一层函数包装，错误栈里的 `<anonymous>:N` 比真实行号多 2，取行号时要减掉：
+
+```js
+var m = /<anonymous>:(\d+):(\d+)/.exec(err.stack);
+var lineNo = m ? Number(m[1]) - 2 : 0;
+```
+
+插桩给出的死循环行号不受影响（那个是 `__JR_LOOP__行号` 直接抛出来的）。
+
+#### 必须承认的边界
+
+- 判定的是「某行循环累计执行超过 1 秒」，不是数学意义上的死循环；**正常但特别慢的循环也会被判定**，所以开关默认关闭，文案也写「可能是死循环」
+- 递归导致的栈溢出不在循环范围内，由 `RangeError` 自己报出来
+- 关闭保护时源码不改写，所以 5 秒提示**指不出行号**，只能提示「请检查代码是否有误」；要定位行号必须开保护
+- 插桩会改写源码再执行，`Function.prototype.toString()` 之类反射能看到 `__jrCheck`，实际使用中几乎碰不到
+
+验证：
+
+1. 关保护 + `while (i < 3) { i = i; }`：约 5.5 秒后出现 `[提示] 执行已超过 5 秒，可能是死循环，请检查代码是否有误（可在设置里开启「死循环保护」定位到具体行）`，页面照常可用
+2. 开保护 + 同一段代码：约 1 秒后出现 `第 2 行检测到死循环（该循环已连续执行超过 1 秒），已终止本次执行`
+3. 开保护 + 三行代码 `foo.bar()`：报 `foo is not defined 行号:3`，行号既没被插桩挤歪，也没被 `new Function` 的包装偏移
+4. 关保护 + 7000 万次累加：中途提示一次，但**最终打印出了结果**，耗时只有几十毫秒
 
 ### 本章 checkpoint
 
 - 理解 `sandbox` 默认全禁、逐项放行；知道为什么不能加 `allow-same-origin`
 - 会用 `srcdoc` + `postMessage` 做父子通信
 - 知道重跑时 `remove()` 顺带清掉了上一轮所有副作用
+- 知道 iframe 与页面同线程，死循环会锁死整页；能说清「Worker + terminate」为什么能解决
+- 能解释「停机问题不可判定」为什么让超时阈值必然误杀，以及插桩为什么是拿到行号的唯一办法
 
 ---
 

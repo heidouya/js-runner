@@ -6,7 +6,6 @@
   var JR = window.JR;
 
   JR.initConsole();
-  JR.initRunner();
   JR.initEditor();
   JR.initHint();
   JR.initSettings();
